@@ -14,11 +14,12 @@ import tqdm
 from torch import nn
 from sklearn.model_selection import KFold
 import pandas as pd
+from torch.utils.data import Subset
 
 from jtop import jtop
 from RejectionEnsemble import RejectionEnsemble
 from RejectionEnsembleWithOnlineCalibration import RejectionEnsembleWithOnlineCalibration #, predict_batch, predict_batch_optimized, train_pytorch
-from utils import benchmark_torchmodel
+from utils import benchmark_torch_batchprocessing
 
 class CIFARModelWrapper():
     def __init__(self, model_name):
@@ -53,6 +54,9 @@ class CIFARModelWrapper():
         else:
             return self.model(X)
 
+    def predict_single(self, x, return_cnt = False):
+        return self.predict_batch(x.unsqueeze(0), return_cnt)
+
     def predict_batch(self, T, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         with torch.no_grad():
@@ -70,7 +74,7 @@ def main(args):
         transforms.Normalize(mean=[0.5071, 0.4867, 0.4408], std=[0.2675, 0.2565, 0.2761]),
     ])
 
-    kf = KFold(n_splits=args["x"])
+    kf = KFold(n_splits=args["x"], shuffle=True)
     dataset = datasets.CIFAR100(root=args["data"], train=False, download=True, transform=transform)
 
     # Use a pre-trained Wide ResNet model
@@ -108,16 +112,11 @@ def main(args):
             "max_depth":None
         }
     ]
+    measure_jetson_power = False
     for i, (train_idx, test_idx) in enumerate(kf.split(dataset.data)):
-        train_dataset = datasets.CIFAR100(root=args["data"], train=False, download=False, transform=transform)
-        train_dataset.data = train_dataset.data[train_idx]
-        train_dataset.targets = np.array(train_dataset.targets)[train_idx]
+        train_dataset = Subset(dataset, train_idx)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
-
-        test_dataset = datasets.CIFAR100(root=args["data"], train=False, download=False, transform=transform)
-        test_dataset.data = test_dataset.data[test_idx]
-        test_dataset.targets = np.array(test_dataset.targets)[test_idx]
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
+        test_dataset = Subset(dataset, test_idx)
 
         for k, r in enumerate(rejectors):   
             rname = "_".join([str(v) for v in r.values()])
@@ -134,7 +133,7 @@ def main(args):
                     "rejector":f"{rname}",
                     "run":i,
                     "p":p,
-                    **benchmark_torchmodel(test_loader, rewoc, f"{i+1}/{args['x']} Applying rejection ensemble with online calibration for p = {p} and r = {rname}", jetson=True)
+                    **benchmark_torch_batchprocessing(test_dataset, rewoc, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble with online calibration for p = {p} and r = {rname}", jetson=measure_jetson_power)
                 })
 
                 re = RejectionEnsemble(fsmall, fbig, rejector_cfg=copy.copy(r), p=p, return_cnt=True)
@@ -145,7 +144,7 @@ def main(args):
                     "rejector":f"{rname}",
                     "run":i,
                     "p":p,
-                    **benchmark_torchmodel(test_loader, re, f"{i+1}/{args['x']} Applying rejection ensemble for p = {p} and r = {rname}", jetson=True)
+                    **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power)
                 })
 
                 if p == Ps[0] and k == 0:
@@ -154,20 +153,15 @@ def main(args):
                         "rejector":None,
                         "run":i,
                         "p":p,
-                        **benchmark_torchmodel(test_loader, fsmall, f"{i+1}/{args['x']} Applying small model", jetson=True)
+                        **benchmark_torch_batchprocessing(test_dataset, fsmall, args["b"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power)
                     })
-                    # TODO FIX THIS IN PLOT SCRIPT
-                    # The small model is always used when p = 0, but CIFARModelWrapper always returns the batch count. For the small model we fix it here with setting preal/pmax/pmin to 0.
-                    metrics[-1]["preal"] = 0
-                    metrics[-1]["pmax"] = 0
-                    metrics[-1]["pmin"] = 0
 
                     metrics.append({
                         "model":"big",
                         "rejector":None,
                         "run":i,
                         "p":p,
-                        **benchmark_torchmodel(test_loader, fbig, f"{i+1}/{args['x']} Applying big model", jetson=True)
+                        **benchmark_torch_batchprocessing(test_dataset, fbig, args["b"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power)
                     })
 
     df = pd.DataFrame(metrics)
@@ -185,7 +179,7 @@ if __name__ == '__main__':
     parser.add_argument("--big", help='Path to ImageNet data.', required=False, type=str, default="cifar100_repvgg_a2")
     parser.add_argument("-b", help='Batch size.', required=False, type=int, default=64)
     parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
-    parser.add_argument("--rejector", help='Rejector.', required=False, type=str, default="DecisionTreeClassifier")
+    # parser.add_argument("--rejector", help='Rejector.', required=False, type=str, default="DecisionTreeClassifier")
     parser.add_argument("-p", help='Budget to try.', required=False, nargs='+', default=[0, 0.25, 0.5, 0.75, 1])
     #parser.add_argument("-p", help='Budget to try.', required=False, nargs='+', default=list(np.arange(0.0, 1.05, 0.05)))
     parser.add_argument("--out", help='Name / Path of output csv.', required=False, type=str, default="cifar100.csv")

@@ -58,8 +58,8 @@ class RejectionEnsemble():
 
         return self.fsmall, self.fbig, self.rejector
 
-    # def __call__(self, T):
-    #     return self.predict_batch_optimized(T, self.return_cnt)
+    def predict_single(self, x, return_cnt = False):
+        return self.predict_batch(x.unsqueeze(0), return_cnt)
 
     def predict_batch(self, T, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

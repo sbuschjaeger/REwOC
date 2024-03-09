@@ -1,4 +1,5 @@
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 import torch
 import tqdm
 from sklearn.tree import DecisionTreeClassifier
@@ -21,9 +22,10 @@ class RejectionEnsembleWithOnlineCalibration():
                 xbatch = xbatch.to(device)
                 ybatch = ybatch.to(device)
                 with torch.no_grad():
+                    tmp = self.fsmall.features(xbatch)
+                    X.append(tmp.cpu())
+                    preds_small = self.fsmall.classifier(tmp).argmax(1) 
                     preds_big = self.fbig.predict_batch(xbatch).argmax(1)
-                    preds_small = self.fsmall.predict_batch(xbatch).argmax(1) 
-                    X.append(self.fsmall.features(xbatch).cpu())
 
                     for i in range(preds_big.shape[0]):
                         if preds_big[i] == preds_small[i]:
@@ -97,6 +99,25 @@ class RejectionEnsembleWithOnlineCalibration():
         
     #     return np.array(ypred)
 
+    def predict_single(self, x, return_cnt = False):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        x = x.unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            tmp = self.fsmall.features(x)
+            r_pred = self.rejector.predict_proba(tmp.cpu().numpy())
+            b = self.p * r_pred[0][1]
+            coin = np.random.choice([False, True], p=[1-b, b])
+            if coin:
+                ypred = self.fbig(x)
+            else:
+                ypred = self.fsmall.classifier(x)
+            
+            if return_cnt:
+                return ypred.argmax(1).item(), 1 if coin else 0 
+            else:
+                return ypred.argmax(1).item()
+            
     def predict_batch(self, T, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         T = T.to(device)
