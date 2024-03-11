@@ -12,12 +12,12 @@ class RejectionEnsemble():
         self.p = p
         self.return_cnt = return_cnt
 
-    def train_pytorch(self, dataset_loader, pbar_desc=""):
+    def train_pytorch(self, dataset_loader, pbar_desc="",verbose=False):
         X = []
         Y = []
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        with tqdm.tqdm(total=len(dataset_loader.dataset), desc = f"{pbar_desc} Preparing training data") as pb:
+        with tqdm.tqdm(total=len(dataset_loader.dataset), desc = f"{pbar_desc} Preparing training data", disable=not verbose) as pb:
             for i, (xbatch, ybatch) in enumerate(dataset_loader):
                 xbatch = xbatch.to(device)
                 ybatch = ybatch.to(device)
@@ -49,7 +49,8 @@ class RejectionEnsemble():
             else:
                 raise ValueError(f"I do not know the classifier {rejector_name}. Please use another classifier.")
             
-            print(f"{pbar_desc} Fitting rejector")
+            if verbose:
+                print(f"{pbar_desc} Fitting rejector")
             rejector.fit(X,targets)
             
             self.rejector = rejector
@@ -59,7 +60,7 @@ class RejectionEnsemble():
         return self.fsmall, self.fbig, self.rejector
 
     def predict_single(self, x, return_cnt = False):
-        return self.predict_batch(x.unsqueeze(0), return_cnt)
+        return self.predict_batch(x, return_cnt)
 
     def predict_batch(self, T, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

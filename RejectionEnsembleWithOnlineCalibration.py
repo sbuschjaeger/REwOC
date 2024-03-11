@@ -12,12 +12,21 @@ class RejectionEnsembleWithOnlineCalibration():
         self.return_cnt = return_cnt
         self.p = p
 
-    def train_pytorch(self, dataset_loader, pbar_desc=""):
+        # self.t = 0.5
+        self.r_sum = 0
+        self.cnt = 0
+
+    def reset(self):
+        # self.t = 0.5
+        self.r_sum = 0
+        self.cnt = 0
+
+    def train_pytorch(self, dataset_loader, pbar_desc="", verbose=False):
         X = []
         Y = []
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        with tqdm.tqdm(total=len(dataset_loader.dataset), desc = f"{pbar_desc} Preparing training data") as pb:
+        with tqdm.tqdm(total=len(dataset_loader.dataset), desc = f"{pbar_desc} Preparing training data", disable=not verbose) as pb:
             for i, (xbatch, ybatch) in enumerate(dataset_loader):
                 xbatch = xbatch.to(device)
                 ybatch = ybatch.to(device)
@@ -46,7 +55,8 @@ class RejectionEnsembleWithOnlineCalibration():
         else:
             raise ValueError(f"I do not know the classifier {rejector_name}. Please use another classifier.")
         
-        print(f"{pbar_desc} Fitting rejector")
+        if verbose:
+            print(f"{pbar_desc} Fitting rejector")
         rejector.fit(X,Y)
         
         self.rejector = rejector
@@ -101,22 +111,33 @@ class RejectionEnsembleWithOnlineCalibration():
 
     def predict_single(self, x, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        x = x.unsqueeze(0).to(device)
-
+        x = x.to(device)
         with torch.no_grad():
             tmp = self.fsmall.features(x)
             r_pred = self.rejector.predict_proba(tmp.cpu().numpy())
-            b = self.p * r_pred[0][1]
-            coin = np.random.choice([False, True], p=[1-b, b])
+            
+            self.r_sum += r_pred.argmax(1)[0] #[1]
+            self.cnt += 1
+
+            a = 0 if self.r_sum == 0 else self.p * self.cnt / (self.r_sum + 1e-7)
+            b = max(min(a * r_pred.argmax(1)[0], 1), 0)
+            # b = max(min(a * r_pred[0][1], 1), 0)
+            try:
+                coin = np.random.choice([False, True], p=[1-b, b])
+            except Exception as e:  
+                print(b)
+                print(1-b)
+                raise e
+            
             if coin:
-                ypred = self.fbig(x)
+                ypred = self.fbig.predict_single(x)
             else:
-                ypred = self.fsmall.classifier(x)
+                ypred = self.fsmall.classifier(tmp)
             
             if return_cnt:
-                return ypred.argmax(1).item(), 1 if coin else 0 
+                return ypred, 1 if coin else 0 
             else:
-                return ypred.argmax(1).item()
+                return ypred
             
     def predict_batch(self, T, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
