@@ -79,95 +79,139 @@ def main(args):
     metrics = []
     
     if not isinstance(args["p"], list):
-        Ps = [args["p"]]
+        Ps = [float(args["p"])]
     else:
-        Ps = args["p"]
+        Ps = [float(p) for p in args["p"]]
 
     rejectors = [
-        {
-            "model":"LogisticRegression"
-        },
-        {
-            "model":"DecisionTreeClassifier",
-            "max_depth":2
-        },
-        {
-            "model":"DecisionTreeClassifier",
-            "max_depth":5
-        },
-        {
-            "model":"DecisionTreeClassifier",
-            "max_depth":10
-        },
+        # {
+        #     "model":"LogisticRegression"
+        # },
+        # {
+        #     "model":"DecisionTreeClassifier",
+        #     "max_depth":2
+        # },
+        # {
+        #     "model":"DecisionTreeClassifier",
+        #     "max_depth":5
+        # },
+        # {
+        #     "model":"DecisionTreeClassifier",
+        #     "max_depth":10
+        # },
         {
             "model":"DecisionTreeClassifier",
             "max_depth":None
         }
     ]
-    measure_jetson_power = False
+    measure_jetson_power = args["e"]
     n_data = len(dataset)
-    n_experiments = args["x"]*len(rejectors)*len(Ps)*2 + args["x"]*2
-    with tqdm.tqdm(total=n_experiments, desc = "Overall progress") as pb:
-        for i, (train_idx, test_idx) in enumerate(kf.split(range(n_data))):
-            train_dataset = Subset(dataset, train_idx)
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
-            test_dataset = Subset(dataset, test_idx)
 
-            for k, r in enumerate(rejectors):   
-                rname = "_".join([str(v) for v in r.values()])
-                # p does not depend on the training, so we only have to train one rewoc per P
-                # Hence, we set p to a dummy value here, because we set it to the corret value later in the loop for evaluation
-                rewoc = RejectionEnsembleWithOnlineCalibration(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True)
-                rewoc.train_pytorch(train_loader, f"{i+1}/{args['x']}",verbose=False)
-
+    cfgs = []
+    n_experiments = 0
+    for i, (train_idx, test_idx) in enumerate(kf.split(range(n_data))):
+        for k, r in enumerate(rejectors):  
+            rname = "_".join([str(v) for v in r.values()]) 
+            for tm in ["confidence", "virtual-labels"]:
                 for p in Ps:
-                    rewoc.p = p 
-
-                    pb.set_description(f"{i+1}/{args['x']} Applying rejection ensemble with online calibration for p = {p} and r = {rname}")
-                    metrics.append({
-                        "model":f"REwOC",
+                    cfgs.append(
+                        {
+                            "model":RejectionEnsemble(fsmall, fbig, p=p, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=False),
+                            "train":train_idx,
+                            "test":test_idx,
+                            "i":i,
+                            "rejector":f"{rname}",
+                            "train_method":tm,
+                            "calibration":False,
+                            "p":p
+                        }
+                    )
+                    n_experiments += 1
+                cfgs.append(
+                    {
+                        "model":RejectionEnsemble(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=True),
+                        "train":train_idx,
+                        "test":test_idx,
+                        "i":i,
                         "rejector":f"{rname}",
-                        "run":i,
-                        "p":p,
-                        **benchmark_torch_batchprocessing(test_dataset, rewoc, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble with online calibration for p = {p} and r = {rname}", jetson=measure_jetson_power,
-                        verbose=False)
-                    })
-                    pb.update(1)
+                        "train_method":tm,
+                        "calibration":True
+                    }
+                )
+                n_experiments += len(Ps)
+        cfgs.append(
+            {
+                "model":fsmall,
+                "train":None,
+                "test":test_idx,
+                "i":i,
+                "big":False
+            }
+        )
+        cfgs.append(
+            {
+                "model":fbig,
+                "train":None,
+                "test":test_idx,
+                "i":i,
+                "big":True
+            }
+        )
+        n_experiments += 2
 
-                    pb.set_description(f"{i+1}/{args['x']} Training rejection ensemble for p = {p} and r = {rname}")
-                    re = RejectionEnsemble(fsmall, fbig, rejector_cfg=copy.copy(r), p=p, return_cnt=True)
-                    re.train_pytorch(train_loader, f"{i+1}/{args['x']}", verbose=False)
+    with tqdm.tqdm(total=n_experiments, desc = "Overall progress") as pb:
+        for cfg in cfgs:
+            train_dataset = Subset(dataset, cfg["train"])
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
+            test_dataset = Subset(dataset, cfg["test"])
 
-                    pb.set_description("{i+1}/{args['x']} Applying rejection ensemble for p = {p} and r = {rname}")
-                    metrics.append({
-                        "model":f"RE",
-                        "rejector":f"{rname}",
-                        "run":i,
-                        "p":p,
-                        **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power,verbose=False)
-                    })
-                    pb.update(1)
+            if cfg["train"] is None:
+                pb.set_description(f"(BATCH) Applying {'big' if cfg['big'] else 'small'} model for {i+1}/{args['x']}")
+                metrics.append({
+                    "model":"big" if cfg["big"] else "small",
+                    "batch":True,
+                    "rejector":None,
+                    "train_method":None,
+                    "calibration":None,
+                    "run":cfg["i"],
+                    "p":None,
+                    **benchmark_torch_batchprocessing(test_dataset, cfg["model"], args["b"], f"{i+1}/{args['x']} Applying {'big' if cfg['big'] else 'small'} model", jetson=measure_jetson_power,verbose=False)
+                })
+                pb.update(1)
+            else:
+                if cfg["calibration"]:
+                    pb.set_description(f"Training rejection ensemble for p = {p} and r = {rname} and run {i+1}/{args['x']} ")
+                    re = cfg["model"]
 
-                    if p == Ps[0] and k == 0:
-                        pb.set_description(f"{i+1}/{args['x']} Applying small model")
+                    re.train_pytorch(train_loader, f"{i+1}/{args['x']}", False)
+                    for p in Ps:
+                        re.p = p
                         metrics.append({
-                            "model":"small",
-                            "rejector":None,
-                            "run":i,
+                            "model":"RE",
+                            "batch":True,
+                            "train_method":cfg["train_method"],
+                            "calibration":cfg["calibration"],
+                            "rejector":cfg["rejector"],
+                            "run":cfg["i"],
                             "p":p,
-                            **benchmark_torch_batchprocessing(test_dataset, fsmall, args["b"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
+                            **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
                         })
                         pb.update(1)
+                else:
+                    pb.set_description(f"Training rejection ensemble for p = {p} and r = {rname} and run {i+1}/{args['x']} ")
+                    re = cfg["model"]
 
-                        pb.set_description(f"{i+1}/{args['x']} Applying big model")
-                        metrics.append({
-                            "model":"big",
-                            "rejector":None,
-                            "run":i,
-                            "p":p,
-                            **benchmark_torch_batchprocessing(test_dataset, fbig, args["b"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
-                        })
-                        pb.update(1)
+                    re.train_pytorch(train_loader, f"{i+1}/{args['x']}", False)
+                    metrics.append({
+                        "model":"RE",
+                        "batch":True,
+                        "train_method":cfg["train_method"],
+                        "calibration":cfg["calibration"],
+                        "rejector":cfg["rejector"],
+                        "run":cfg["i"],
+                        "p":cfg["p"],
+                        **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
+                    })
 
     with open(args["out"], "w") as outfile:
         json.dump(metrics, outfile)
@@ -186,6 +230,7 @@ if __name__ == '__main__':
     parser.add_argument("--big", help='Path to ImageNet data.', required=False, type=str, default="vit_l_16")
     parser.add_argument("-b", help='Batch size.', required=False, type=int, default=32)
     parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
+    parser.add_argument("-e", help='If true, energy is measured.', action='store_true')
     # parser.add_argument("--rejector", help='Rejector.', required=False, type=str, default="DecisionTreeClassifier")
     # parser.add_argument("-p", help='Budget to try.', required=False, nargs='+', default=[0,0.5,1])
     parser.add_argument("-p", help='Budget to try.', required=False, nargs='+', default=list(np.arange(0.0, 1.1, 0.1)))

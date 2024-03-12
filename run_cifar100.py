@@ -91,21 +91,21 @@ def main(args):
         Ps = [float(p) for p in args["p"]]
 
     rejectors = [
-        # {
-        #     "model":"LogisticRegression"
-        # },
-        # {
-        #     "model":"DecisionTreeClassifier",
-        #     "max_depth":2
-        # },
-        # {
-        #     "model":"DecisionTreeClassifier",
-        #     "max_depth":5
-        # },
-        # {
-        #     "model":"DecisionTreeClassifier",
-        #     "max_depth":10
-        # },
+        {
+            "model":"LogisticRegression"
+        },
+        {
+            "model":"DecisionTreeClassifier",
+            "max_depth":2
+        },
+        {
+            "model":"DecisionTreeClassifier",
+            "max_depth":5
+        },
+        {
+            "model":"DecisionTreeClassifier",
+            "max_depth":10
+        },
         {
             "model":"DecisionTreeClassifier",
             "max_depth":None
@@ -113,120 +113,113 @@ def main(args):
     ]
     measure_jetson_power = args["e"]
     n_data = len(dataset)
-    n_experiments = args["x"]*len(rejectors)*len(Ps)*4 + args["x"]*4
-    with tqdm.tqdm(total=n_experiments, desc = "Overall progress") as pb:
-        for i, (train_idx, test_idx) in enumerate(kf.split(range(n_data))):
-            train_dataset = Subset(dataset, train_idx)
-            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
-            test_dataset = Subset(dataset, test_idx)
 
-            for k, r in enumerate(rejectors):   
-                rname = "_".join([str(v) for v in r.values()])
-                # p does not depend on the training, so we only have to train one rewoc per P
-                # Hence, we set p to a dummy value here, because we set it to the corret value later in the loop for evaluation
-                pb.set_description(f"{i+1}/{args['x']} Training rejection ensemble with online calibration with r = {rname}")
-                rewoc = RejectionEnsembleWithOnlineCalibration(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True)
-                rewoc.train_pytorch(train_loader, f"{i+1}/{args['x']}")
-
+    cfgs = []
+    n_experiments = 0
+    for i, (train_idx, test_idx) in enumerate(kf.split(range(n_data))):
+        for k, r in enumerate(rejectors):  
+            rname = "_".join([str(v) for v in r.values()]) 
+            for tm in ["confidence", "virtual-labels"]:
                 for p in Ps:
-                    rewoc.p = p 
-                    rewoc.reset()
-
-                    pb.set_description(f"{i+1}/{args['x']} (REALTIME) Applying rejection ensemble with online calibration for p = {p} and r = {rname}")
-                    metrics.append({
-                        "model":f"REwOC",
-                        "batch":False,
+                    cfgs.append(
+                        {
+                            "model":RejectionEnsemble(fsmall, fbig, p=p, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=False),
+                            "train":train_idx,
+                            "test":test_idx,
+                            "i":i,
+                            "rejector":f"{rname}",
+                            "train_method":tm,
+                            "calibration":False,
+                            "p":p
+                        }
+                    )
+                    n_experiments += 1
+                cfgs.append(
+                    {
+                        "model":RejectionEnsemble(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=True),
+                        "train":train_idx,
+                        "test":test_idx,
+                        "i":i,
                         "rejector":f"{rname}",
-                        "run":i,
-                        "p":p,
-                        **benchmark_torch_realtimeprocessing(test_dataset, rewoc, f"{i+1}/{args['x']} Applying rejection ensemble with online calibration for p = {p} and r = {rname}", jetson=measure_jetson_power,verbose=False)
-                    })
-                    pb.update(1)
-                    rewoc.reset()
-                    
-                    pb.set_description(f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble with online calibration for p = {p} and r = {rname}")
+                        "train_method":tm,
+                        "calibration":True
+                    }
+                )
+                n_experiments += len(Ps)
+        cfgs.append(
+            {
+                "model":fsmall,
+                "train":None,
+                "test":test_idx,
+                "i":i,
+                "big":False
+            }
+        )
+        cfgs.append(
+            {
+                "model":fbig,
+                "train":None,
+                "test":test_idx,
+                "i":i,
+                "big":True
+            }
+        )
+        n_experiments += 2
+
+    with tqdm.tqdm(total=n_experiments, desc = "Overall progress") as pb:
+        for cfg in cfgs:
+            train_dataset = Subset(dataset, cfg["train"])
+            train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
+            test_dataset = Subset(dataset, cfg["test"])
+
+            if cfg["train"] is None:
+                pb.set_description(f"(BATCH) Applying {'big' if cfg['big'] else 'small'} model for {i+1}/{args['x']}")
+                metrics.append({
+                    "model":"big" if cfg["big"] else "small",
+                    "batch":True,
+                    "rejector":None,
+                    "train_method":None,
+                    "calibration":None,
+                    "run":cfg["i"],
+                    "p":None,
+                    **benchmark_torch_batchprocessing(test_dataset, cfg["model"], args["b"], f"{i+1}/{args['x']} Applying {'big' if cfg['big'] else 'small'} model", jetson=measure_jetson_power,verbose=False)
+                })
+                pb.update(1)
+            else:
+                if cfg["calibration"]:
+                    pb.set_description(f"Training rejection ensemble for p = {p} and r = {rname} and run {i+1}/{args['x']} ")
+                    re = cfg["model"]
+
+                    re.train_pytorch(train_loader, f"{i+1}/{args['x']}", False)
+                    for p in Ps:
+                        re.p = p
+                        metrics.append({
+                            "model":"RE",
+                            "batch":True,
+                            "train_method":cfg["train_method"],
+                            "calibration":cfg["calibration"],
+                            "rejector":cfg["rejector"],
+                            "run":cfg["i"],
+                            "p":p,
+                            **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
+                        })
+                        pb.update(1)
+                else:
+                    pb.set_description(f"Training rejection ensemble for p = {p} and r = {rname} and run {i+1}/{args['x']} ")
+                    re = cfg["model"]
+
+                    re.train_pytorch(train_loader, f"{i+1}/{args['x']}", False)
                     metrics.append({
-                        "model":f"REwOC",
+                        "model":"RE",
                         "batch":True,
-                        "rejector":f"{rname}",
-                        "run":i,
-                        "p":p,
-                        **benchmark_torch_batchprocessing(test_dataset, rewoc, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble with online calibration for p = {p} and r = {rname}", jetson=measure_jetson_power,verbose=False)
+                        "train_method":cfg["train_method"],
+                        "calibration":cfg["calibration"],
+                        "rejector":cfg["rejector"],
+                        "run":cfg["i"],
+                        "p":cfg["p"],
+                        **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
                     })
                     pb.update(1)
-                    
-
-                    # pb.set_description(f"{i+1}/{args['x']} Training rejection ensemble for p = {p} and r = {rname}")
-                    # re = RejectionEnsemble(fsmall, fbig, rejector_cfg=copy.copy(r), p=p, return_cnt=True)
-                    # re.train_pytorch(train_loader, f"{i+1}/{args['x']}")
-
-                    # pb.set_description(f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}")
-                    # metrics.append({
-                    #     "model":f"RE",
-                    #     "batch":True,
-                    #     "rejector":f"{rname}",
-                    #     "run":i,
-                    #     "p":p,
-                    #     **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power,verbose=False)
-                    # })
-                    # pb.update(1)
-
-                    # pb.set_description(f"{i+1}/{args['x']} (REALTIME) Applying rejection ensemble for p = {p} and r = {rname}")
-                    # metrics.append({
-                    #     "model":f"RE",
-                    #     "batch":False,
-                    #     "rejector":f"{rname}",
-                    #     "run":i,
-                    #     "p":p,
-                    #     **benchmark_torch_realtimeprocessing(test_dataset, re, f"{i+1}/{args['x']} Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power,verbose=False)
-                    # })
-                    # pb.update(1)
-
-                    if p == Ps[0] and k == 0:
-                        pb.set_description(f"{i+1}/{args['x']} (BATCH) Applying small model")
-                        metrics.append({
-                            "model":"small",
-                            "batch":True,
-                            "rejector":None,
-                            "run":i,
-                            "p":p,
-                            **benchmark_torch_batchprocessing(test_dataset, fsmall, args["b"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
-                        })
-                        pb.update(1)
-
-                        pb.set_description(f"{i+1}/{args['x']} (REALTIME) Applying small model")
-                        metrics.append({
-                            "model":"small",
-                            "batch":False,
-                            "rejector":None,
-                            "run":i,
-                            "p":p,
-                            **benchmark_torch_realtimeprocessing(test_dataset, fsmall, f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
-                        })
-                        pb.update(1)
-
-                        pb.set_description(f"{i+1}/{args['x']} (BATCH) Applying big model")
-                        metrics.append({
-                            "model":"big",
-                            "batch":True,
-                            "rejector":None,
-                            "run":i,
-                            "p":p,
-                            **benchmark_torch_batchprocessing(test_dataset, fbig, args["b"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
-                        })
-                        pb.update(1)
-
-                        pb.set_description(f"{i+1}/{args['x']} (REALTIME) Applying big model")
-                        metrics.append({
-                            "model":"big",
-                            "batch":False,
-                            "rejector":None,
-                            "run":i,
-                            "p":p,
-                            **benchmark_torch_realtimeprocessing(test_dataset, fbig, f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
-                        })
-                        pb.update(1)
-
 
     with open(args["out"], "w") as outfile:
         json.dump(metrics, outfile)

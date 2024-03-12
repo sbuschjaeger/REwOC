@@ -4,6 +4,9 @@ import torch
 import tqdm
 from sklearn.tree import DecisionTreeClassifier
 
+def sigmoid(x):
+    return 1/(1 + np.exp(-x)) 
+
 class RejectionEnsembleWithOnlineCalibration():
     def __init__(self, fsmall, fbig, p, rejector_cfg={"model":"DecisionTreeClassifier"}, return_cnt = False):
         self.fsmall = fsmall
@@ -12,14 +15,12 @@ class RejectionEnsembleWithOnlineCalibration():
         self.return_cnt = return_cnt
         self.p = p
 
-        # self.t = 0.5
-        self.r_sum = 0
-        self.cnt = 0
+        self.t = 0.5
+        self.step_size = 0.02
 
     def reset(self):
-        # self.t = 0.5
-        self.r_sum = 0
-        self.cnt = 0
+        self.t = 0.5
+        self.step_size = 0.02
 
     def train_pytorch(self, dataset_loader, pbar_desc="", verbose=False):
         X = []
@@ -63,79 +64,25 @@ class RejectionEnsembleWithOnlineCalibration():
 
         return self.fsmall, self.fbig, rejector
 
-    # def __call__(self, T):
-    #     return self.predict_batch_optimized(T, self.p, self.return_cnt)
-    
-    # def predict_batch(self, T, p):
-    #     """
-    #     Predicts the labels for a batch of samples using a rejector ensemble.
-
-    #     Args:
-    #         fsmall (torch.nn.Module): The small model used for predicting labels for samples in Ts.
-    #         fbig (torch.nn.Module): The big model used for predicting labels for samples in Tb.
-    #         rejector (object): The rejector model used for determining which samples belong to Ts and Tb.
-    #         T (torch.Tensor): The input batch of samples.
-    #         p (float): The proportion of samples to be assigned to Tb.
-
-    #     Returns:
-    #         np.ndarray: An array of predicted labels for the input batch of samples.
-    #     """
-    #     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    #     M = len(T)
-    #     T = T.to(device)
-    #     with torch.no_grad():
-    #         tmp = self.fsmall.features(T)
-    #         tmp = torch.nn.functional.adaptive_avg_pool2d(tmp, (1, 1))
-    #         tmp = torch.flatten(tmp, 1)
-    #         r_pred = self.rejector.predict_proba(tmp.cpu())
-
-    #     Ts = [i for i in range(M) if r_pred[i].argmax() == 0]
-    #     Tb = [(r_pred[i][1], i) for i in range(M) if r_pred[i].argmax() == 1]
-    #     P = int(np.floor(p * M))
-
-    #     candidates = sorted(Tb, reverse=True)
-    #     if len(candidates) <= P:
-    #         Tb = [i for _,i in candidates]
-    #     else:
-    #         Tb = [i for _,i in candidates[0:P]]
-    #         Ts = Ts + [i for _,i in candidates[P:]]
-
-    #     ypred = []
-    #     for i in range(len(T)):
-    #         if i in Tb: 
-    #             ypred.append(self.fbig(T[i].unsqueeze(0)).cpu().numpy())
-    #         else:
-    #             ypred.append(self.fsmall(T[i].unsqueeze(0)).cpu().numpy())
-        
-    #     return np.array(ypred)
-
     def predict_single(self, x, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         x = x.to(device)
         with torch.no_grad():
             tmp = self.fsmall.features(x)
             r_pred = self.rejector.predict_proba(tmp.cpu().numpy())
-            
-            self.r_sum += r_pred.argmax(1)[0] #[1]
-            self.cnt += 1
+            r = r_pred[0][1]
 
-            a = 0 if self.r_sum == 0 else self.p * self.cnt / (self.r_sum + 1e-7)
-            b = max(min(a * r_pred.argmax(1)[0], 1), 0)
-            # b = max(min(a * r_pred[0][1], 1), 0)
-            try:
-                coin = np.random.choice([False, True], p=[1-b, b])
-            except Exception as e:  
-                print(b)
-                print(1-b)
-                raise e
+            phat = sigmoid(r - self.t)
+            grad = -2*(phat - self.p)*phat*(1-phat)
+            self.t = self.t - self.step_size * grad
             
-            if coin:
+            if r > self.t:
                 ypred = self.fbig.predict_single(x)
             else:
                 ypred = self.fsmall.classifier(tmp)
             
             if return_cnt:
-                return ypred, 1 if coin else 0 
+                return ypred, 1 if r > self.t else 0 
             else:
                 return ypred
             
@@ -156,8 +103,8 @@ class RejectionEnsembleWithOnlineCalibration():
         
         # Determine indices for Ts and Tb using boolean masks
         #Ts_mask = r_pred_tensor.argmax(dim=1) == 0
-        #Tb_mask = r_pred_tensor.argmax(dim=1) == 1
-        Tb_mask = torch.tensor([True for _ in range(M)], device=device, dtype=torch.bool)
+        Tb_mask = r_pred_tensor.argmax(dim=1) == 1
+        #Tb_mask = torch.tensor([True for _ in range(M)], device=device, dtype=torch.bool)
 
         # Assuming Tb_mask is not empty, and we have already computed Tb_confidence and Tb_indices
 
