@@ -91,21 +91,21 @@ def main(args):
         Ps = [float(p) for p in args["p"]]
 
     rejectors = [
-        {
-            "model":"LogisticRegression"
-        },
-        {
-            "model":"DecisionTreeClassifier",
-            "max_depth":2
-        },
-        {
-            "model":"DecisionTreeClassifier",
-            "max_depth":5
-        },
-        {
-            "model":"DecisionTreeClassifier",
-            "max_depth":10
-        },
+        # {
+        #     "model":"LogisticRegression"
+        # },
+        # {
+        #     "model":"DecisionTreeClassifier",
+        #     "max_depth":2
+        # },
+        # {
+        #     "model":"DecisionTreeClassifier",
+        #     "max_depth":5
+        # },
+        # {
+        #     "model":"DecisionTreeClassifier",
+        #     "max_depth":10
+        # },
         {
             "model":"DecisionTreeClassifier",
             "max_depth":None

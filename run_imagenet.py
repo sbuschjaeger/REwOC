@@ -45,7 +45,7 @@ class ImageNetModelWrapper():
             return self.model(X)
 
     def predict_single(self, x, return_cnt = False):
-        return self.predict_batch(x.unsqueeze(0), return_cnt)
+        return self.predict_batch(x, return_cnt)
 
     def predict_batch(self, T, return_cnt = False):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,32 +113,20 @@ def main(args):
         for k, r in enumerate(rejectors):  
             rname = "_".join([str(v) for v in r.values()]) 
             for tm in ["confidence", "virtual-labels"]:
-                for p in Ps:
+                for c in [True, False]:
                     cfgs.append(
                         {
-                            "model":RejectionEnsemble(fsmall, fbig, p=p, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=False),
+                            "model":RejectionEnsemble(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=c),
                             "train":train_idx,
                             "test":test_idx,
                             "i":i,
                             "rejector":f"{rname}",
                             "train_method":tm,
-                            "calibration":False,
-                            "p":p
+                            "calibration":False
                         }
                     )
-                    n_experiments += 1
-                cfgs.append(
-                    {
-                        "model":RejectionEnsemble(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=True),
-                        "train":train_idx,
-                        "test":test_idx,
-                        "i":i,
-                        "rejector":f"{rname}",
-                        "train_method":tm,
-                        "calibration":True
-                    }
-                )
-                n_experiments += len(Ps)
+                    n_experiments += len(Ps)
+
         cfgs.append(
             {
                 "model":fsmall,
@@ -180,7 +168,7 @@ def main(args):
                 pb.update(1)
             else:
                 if cfg["calibration"]:
-                    pb.set_description(f"Training rejection ensemble for p = {p} and r = {rname} and run {i+1}/{args['x']} ")
+                    pb.set_description(f"Training rejection ensemble for r = {rname} and run {i+1}/{args['x']} ")
                     re = cfg["model"]
 
                     re.train_pytorch(train_loader, f"{i+1}/{args['x']}", False)
@@ -198,20 +186,39 @@ def main(args):
                         })
                         pb.update(1)
                 else:
-                    pb.set_description(f"Training rejection ensemble for p = {p} and r = {rname} and run {i+1}/{args['x']} ")
+                    pb.set_description(f"Training rejection ensemble for r = {rname} and run {i+1}/{args['x']} ")
                     re = cfg["model"]
 
                     re.train_pytorch(train_loader, f"{i+1}/{args['x']}", False)
-                    metrics.append({
-                        "model":"RE",
-                        "batch":True,
-                        "train_method":cfg["train_method"],
-                        "calibration":cfg["calibration"],
-                        "rejector":cfg["rejector"],
-                        "run":cfg["i"],
-                        "p":cfg["p"],
-                        **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
-                    })
+                    for p in Ps:
+                        re.p = p
+                        re._train_rejector()
+
+                        metrics.append({
+                            "model":"RE",
+                            "batch":True,
+                            "train_method":cfg["train_method"],
+                            "calibration":cfg["calibration"],
+                            "rejector":cfg["rejector"],
+                            "run":cfg["i"],
+                            "p":p,
+                            **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
+                        })
+                        pb.update(1)
+
+                    
+                    # metrics.append({
+                    #     "model":"RE",
+                    #     "batch":True,
+                    #     "train_method":cfg["train_method"],
+                    #     "calibration":cfg["calibration"],
+                    #     "rejector":cfg["rejector"],
+                    #     "run":cfg["i"],
+                    #     "p":cfg["p"],
+                    #     **benchmark_torch_batchprocessing(test_dataset, re, args["b"], f"{i+1}/{args['x']} (BATCH) Applying rejection ensemble for p = {p} and r = {rname}", jetson=measure_jetson_power, verbose=False)
+                    # }) 
+                    # pb.update(1)
+
 
     with open(args["out"], "w") as outfile:
         json.dump(metrics, outfile)
@@ -227,7 +234,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run a multi-label classification problem on a series of patients. Training and evaluation are performed on a per-patient basis, i.e. we train on patients {1,2,3} and test on patient 4.')
     parser.add_argument("--data", help='Path to CIFAR100 data.', required=False, type=str, default="/mnt/ssd/data/ImageNet")
     parser.add_argument("--small", help='Path to ImageNet data.', required=False, type=str, default="mobilenet_v3_small")
-    parser.add_argument("--big", help='Path to ImageNet data.', required=False, type=str, default="vit_l_16")
+    parser.add_argument("--big", help='Path to ImageNet data.', required=False, type=str, default="wide_resnet101_2")
     parser.add_argument("-b", help='Batch size.', required=False, type=int, default=32)
     parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
     parser.add_argument("-e", help='If true, energy is measured.', action='store_true')

@@ -15,6 +15,35 @@ class RejectionEnsemble():
         self.calibration = calibration
         assert self.train_method in ["confidence", "virtual-labels"]
 
+    def _train_rejector(self, pbar_desc = "", verbose = False):
+        rejector_name = self.rejector_cfg.pop("model")
+        if rejector_name == "DecisionTreeClassifier":
+            rejector = DecisionTreeClassifier(**self.rejector_cfg)
+        elif rejector_name == "LogisticRegression":
+            rejector = LogisticRegression(**self.rejector_cfg)
+        else:
+            raise ValueError(f"I do not know the classifier {rejector_name}. Please use another classifier.")
+        
+        if self.train_method == "confidence":
+            P = int(np.floor(self.p * self.X.shape[0]))
+            if P > 0 and P < self.X.shape[0] and np.unique(self.Y).shape[0] > 1: 
+                # Check if actually use the small and the big model 
+                indices_of_bottom_K = np.argsort(self.Y)[:P]
+                targets = np.zeros_like(self.Y)
+                targets[indices_of_bottom_K] = 1
+                
+                if verbose:
+                    print(f"{pbar_desc} Fitting rejector")
+                rejector.fit(self.X,targets)
+            else:
+                rejector = None
+        else:
+            if verbose:
+                print(f"{pbar_desc} Fitting rejector")
+            rejector.fit(self.X,self.Y)
+            
+        self.rejector = rejector
+
     def train_pytorch(self, dataset_loader, pbar_desc="",verbose=False):
         X = []
         Y = []
@@ -49,36 +78,12 @@ class RejectionEnsemble():
                                     Y.append(0)
 
                 pb.update(ybatch.shape[0])
-        X = np.vstack(X)
-        Y = np.array(Y)
-
-        rejector_name = self.rejector_cfg.pop("model")
-        if rejector_name == "DecisionTreeClassifier":
-            rejector = DecisionTreeClassifier(**self.rejector_cfg)
-        elif rejector_name == "LogisticRegression":
-            rejector = LogisticRegression(**self.rejector_cfg)
-        else:
-            raise ValueError(f"I do not know the classifier {rejector_name}. Please use another classifier.")
         
-        if self.train_method == "confidence":
-            P = int(np.floor(self.p * X.shape[0]))
-            if P > 0 and P < X.shape[0] and np.unique(Y).shape[0] > 1: 
-                # Check if actually use the small and the big model 
-                indices_of_bottom_K = np.argsort(Y)[:P]
-                targets = np.zeros_like(Y)
-                targets[indices_of_bottom_K] = 1
-                
-                if verbose:
-                    print(f"{pbar_desc} Fitting rejector")
-                rejector.fit(X,targets)
-            else:
-                rejector = None
-        else:
-            if verbose:
-                print(f"{pbar_desc} Fitting rejector")
-            rejector.fit(X,Y)
-            
-        self.rejector = rejector
+        # Store training data. This is helpful for multiple experiments in a row with different p values
+        self.X = np.vstack(X)
+        self.Y = np.array(Y)
+
+        self._train_rejector(pbar_desc,verbose)
 
         return self.fsmall, self.fbig, self.rejector
 
