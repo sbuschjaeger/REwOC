@@ -16,11 +16,14 @@ class RejectionEnsemble():
         assert self.train_method in ["confidence", "virtual-labels"]
 
     def _train_rejector(self, pbar_desc = "", verbose = False):
-        rejector_name = self.rejector_cfg.pop("model")
+        rejector_name = self.rejector_cfg["model"]
+        tmp_cfg = self.rejector_cfg.copy()
+        del tmp_cfg["model"]
+
         if rejector_name == "DecisionTreeClassifier":
-            rejector = DecisionTreeClassifier(**self.rejector_cfg)
+            rejector = DecisionTreeClassifier(**tmp_cfg)
         elif rejector_name == "LogisticRegression":
-            rejector = LogisticRegression(**self.rejector_cfg)
+            rejector = LogisticRegression(**tmp_cfg)
         else:
             raise ValueError(f"I do not know the classifier {rejector_name}. Please use another classifier.")
         

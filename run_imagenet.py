@@ -20,7 +20,7 @@ from torch.utils.data import Subset
 
 #from jtop import jtop
 from RejectionEnsemble import RejectionEnsemble
-from RejectionEnsembleWithOnlineCalibration import RejectionEnsembleWithOnlineCalibration #, predict_batch, predict_batch_optimized, train_pytorch
+#from RejectionEnsembleWithOnlineCalibration import RejectionEnsembleWithOnlineCalibration #, predict_batch, predict_batch_optimized, train_pytorch
 from utils import benchmark_torch_batchprocessing
 
 class ImageNetModelWrapper():
@@ -122,7 +122,7 @@ def main(args):
                             "i":i,
                             "rejector":f"{rname}",
                             "train_method":tm,
-                            "calibration":False
+                            "calibration":c
                         }
                     )
                     n_experiments += len(Ps)
@@ -234,7 +234,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run a multi-label classification problem on a series of patients. Training and evaluation are performed on a per-patient basis, i.e. we train on patients {1,2,3} and test on patient 4.')
     parser.add_argument("--data", help='Path to CIFAR100 data.', required=False, type=str, default="/mnt/ssd/data/ImageNet")
     parser.add_argument("--small", help='Path to ImageNet data.', required=False, type=str, default="mobilenet_v3_small")
-    parser.add_argument("--big", help='Path to ImageNet data.', required=False, type=str, default="wide_resnet101_2")
+    parser.add_argument("--big", help='Path to ImageNet data.', required=False, type=str, default="vit_b_32")
     parser.add_argument("-b", help='Batch size.', required=False, type=int, default=32)
     parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
     parser.add_argument("-e", help='If true, energy is measured.', action='store_true')
