@@ -23,7 +23,7 @@ from torch.utils.data import Subset
 from sklearn.base import clone
 
 from Datasets import get_dataset
-from SKRejectionEnsemble import SKRejectionEnsemble
+from RejectionEnsemble import RejectionEnsemble
 from utils import benchmark_batchprocessing
 
 def main(args):
@@ -72,7 +72,7 @@ def main(args):
                     
                     if c:
                         r = clone(rejector)
-                        re = SKRejectionEnsemble(fsmall, fbig, p=0, rejector = r, train_method=tm, calibration=c)
+                        re = RejectionEnsemble(fsmall, fbig, p=0, rejector = r, train_method=tm, calibration=c)
                         re.fit(X_train_re,Y_train_re)
                         for p in Ps:
                             re.p = p
@@ -90,7 +90,7 @@ def main(args):
                     else:
                         for p in Ps:
                             r = clone(rejector)
-                            re = SKRejectionEnsemble(fsmall, fbig, p=p, rejector = r, train_method=tm, calibration=c)
+                            re = RejectionEnsemble(fsmall, fbig, p=p, rejector = r, train_method=tm, calibration=c)
                             re.fit(X_train_re,Y_train_re)
 
                             metrics.append( {

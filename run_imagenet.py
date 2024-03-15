@@ -19,7 +19,7 @@ import pandas as pd
 from torch.utils.data import Subset
 
 #from jtop import jtop
-from RejectionEnsemble import RejectionEnsemble
+from TorchRejectionEnsemble import TorchRejectionEnsemble
 #from RejectionEnsembleWithOnlineCalibration import RejectionEnsembleWithOnlineCalibration #, predict_batch, predict_batch_optimized, train_pytorch
 from utils import benchmark_torch_batchprocessing
 
@@ -116,7 +116,7 @@ def main(args):
                 for c in [True, False]:
                     cfgs.append(
                         {
-                            "model":RejectionEnsemble(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=c),
+                            "model":TorchRejectionEnsemble(fsmall, fbig, p=0, rejector_cfg=copy.copy(r), return_cnt=True, train_method=tm, calibration=c),
                             "train":train_idx,
                             "test":test_idx,
                             "i":i,

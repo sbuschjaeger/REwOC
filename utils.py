@@ -6,7 +6,8 @@ import torch
 
 import tqdm
 
-from SKRejectionEnsemble import SKRejectionEnsemble
+from RejectionEnsemble import RejectionEnsemble
+from TorchRejectionEnsemble import TorchRejectionEnsemble
 
 class JetsonMonitor(threading.Thread):
     def __init__(self):
@@ -118,7 +119,7 @@ def benchmark_batchprocessing(X, y, model, batch_size = 32, pbardesc = "", jetso
         for xbatch, ybatch in create_mini_batches(X, y, batch_size):
             start = time.time()
             
-            if isinstance(model, SKRejectionEnsemble):
+            if isinstance(model, RejectionEnsemble):
                 cur_preds, cnt = model.predict_proba(xbatch, True)
             else:
                 cur_preds, cnt = model.predict_proba(xbatch), X.shape[0]
@@ -150,7 +151,6 @@ def benchmark_torch_batchprocessing(dataset, model, batch_size = 32, pbardesc = 
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=True, num_workers = 6)
     ypred = []
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if jetson:
         jm = JetsonMonitor()
         jm.start()
@@ -161,7 +161,11 @@ def benchmark_torch_batchprocessing(dataset, model, batch_size = 32, pbardesc = 
     with tqdm.tqdm(total=len(dataset), desc = pbardesc, disable=not verbose) as pb:
         for xbatch, ybatch in data_loader:
             start = time.time()
-            cur_preds, cnt = model.predict_batch(xbatch.to(device), True)
+            if isinstance(model, TorchRejectionEnsemble):
+                cur_preds, cnt = model.predict_proba(xbatch, True)
+            else:
+                cur_preds, cnt = model(xbatch), xbatch.shape[0]
+
             runtime.append( time.time() - start )
             pcnts.append(cnt/xbatch.shape[0])
 
