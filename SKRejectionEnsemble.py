@@ -16,13 +16,25 @@ class SKRejectionEnsemble():
 
     def fit(self, X, Y):
         preds_small = self.fsmall.predict_proba(X)
+        self.n_classes_ = len(set(Y))
 
         if self.train_method == "confidence":
             mask = preds_small.argmax(1) != Y
-            y,_ = preds_small.max(1)
+            y = preds_small.max(1)
             y[mask] = 0
             #y = [preds_small[i].max() if preds_small[i].argmax() == ybatch[i] else 0 for i in range(preds_small.shape[0])]
             targets = y
+
+            P = int(np.floor(self.p * X.shape[0]))
+            if P > 0 and P < X.shape[0] and np.unique(Y).shape[0] > 1: 
+                # Check if actually use the small and the big model 
+                indices_of_bottom_K = np.argsort(Y)[:P]
+                targets = np.zeros_like(Y)
+                targets[indices_of_bottom_K] = 1
+                
+                self.rejector.fit(X,targets)
+            else:
+                self.rejector = None
         else:
             preds_big = self.fbig.predict_proba(X).argmax(1)
             preds_small = preds_small.argmax(1)
@@ -35,44 +47,21 @@ class SKRejectionEnsemble():
                         targets.append(1)
                     else:
                         targets.append(0)
-
-        self.X = np.vstack(X)
-        targets = np.array(targets)
-        
-        tmp_cfg = self.rejector_cfg.copy()
-        rejector_name = tmp_cfg.pop("model")
-
-        if rejector_name == "DecisionTreeClassifier":
-            rejector = DecisionTreeClassifier(**tmp_cfg)
-        elif rejector_name == "LogisticRegression":
-            rejector = LogisticRegression(**tmp_cfg)
-        else:
-            raise ValueError(f"I do not know the classifier {rejector_name}. Please use another classifier.")
-        
-        if self.train_method == "confidence":
-            P = int(np.floor(self.p * self.X.shape[0]))
-            if P > 0 and P < self.X.shape[0] and np.unique(self.Y).shape[0] > 1: 
-                # Check if actually use the small and the big model 
-                indices_of_bottom_K = np.argsort(self.Y)[:P]
-                targets = np.zeros_like(self.Y)
-                targets[indices_of_bottom_K] = 1
-                
-                rejector.fit(self.X,targets)
-            else:
-                rejector = None
-        else:
-            rejector.fit(self.X,self.Y)
             
-        self.rejector = rejector
-
+            targets = np.array(targets)
+            if np.unique(targets).shape[0] > 1:
+                self.rejector.fit(X,targets)
+            else:
+                self.rejector = None
+        
         return self.fsmall, self.fbig, self.rejector
 
     def predict_proba(self, T, return_cnt = False):
         if self.rejector is None:
             if self.p == 1:
-                preds, cnt = self.fbig.predict_batch(T, return_cnt=False), T.shape[0]
+                preds, cnt = self.fbig.predict_proba(T), T.shape[0]
             else:
-                preds, cnt = self.fsmall.predict_batch(T, return_cnt=False), 0
+                preds, cnt = self.fsmall.predict_proba(T), 0
 
             if return_cnt:
                 return preds, cnt
@@ -85,25 +74,24 @@ class SKRejectionEnsemble():
                 M = len(T)
                 P = int(np.floor(self.p * M))
 
-                # Determine indices for Ts and Tb using boolean masks
-                _, Tb_sorted_indices = np.sort(r_pred[:, 1], descending=True)
+                Tb_sorted_indices = np.argsort(r_pred[:,1])[::-1]
                 Tb_sorted_indices = Tb_sorted_indices[:P]
 
-                Tb_mask = np.array(M, dtype=np.bool)
+                Tb_mask = np.zeros(M, dtype=bool)
                 Tb_mask[Tb_sorted_indices] = True
                 Ts_mask = ~Tb_mask  
             else:
-                Ts_mask = r_pred.argmax(dim=1) == 0
-                Tb_mask = r_pred.argmax(dim=1) == 1
+                Ts_mask = r_pred.argmax(1) == 0
+                Tb_mask = r_pred.argmax(1) == 1
 
-            with torch.no_grad():
+            ypred = np.zeros((T.shape[0], self.n_classes_))
+            if not np.all(Ts_mask == False):
                 fsmall_preds = self.fsmall.predict_proba(T[Ts_mask])
-
-                ypred = np.empty((T.shape[0], fsmall_preds.shape[1]), dtype=fsmall_preds.dtype)
                 ypred[Ts_mask] = fsmall_preds
-                if not np.all(Tb_mask == False):
-                    fbig_preds = self.fbig.predict_proba(T[Tb_mask])
-                    ypred[Tb_mask] = fbig_preds
+
+            if not np.all(Tb_mask == False):
+                fbig_preds = self.fbig.predict_proba(T[Tb_mask])
+                ypred[Tb_mask] = fbig_preds
             
             if return_cnt:
                 return ypred, Tb_mask.sum().item()

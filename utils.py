@@ -121,13 +121,13 @@ def benchmark_batchprocessing(X, y, model, batch_size = 32, pbardesc = "", jetso
             if isinstance(model, SKRejectionEnsemble):
                 cur_preds, cnt = model.predict_proba(xbatch, True)
             else:
-                cur_preds, cnt = model.predict_proba(xbatch, True), X.shape[0]
+                cur_preds, cnt = model.predict_proba(xbatch), X.shape[0]
 
             runtime.append( time.time() - start )
             pcnts.append(cnt/xbatch.shape[0])
 
-            ypred.extend(cur_preds.argmax(1).cpu().numpy())
-            targets.extend(ybatch.cpu().numpy())
+            ypred.extend(cur_preds.argmax(1))
+            targets.extend(ybatch)
 
             pb.update(xbatch.shape[0])
 
