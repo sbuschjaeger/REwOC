@@ -23,7 +23,7 @@ import pandas as pd
 from torch.utils.data import Subset
 
 from TorchRejectionEnsemble import TorchRejectionEnsemble, get_predictions
-from utils import benchmark_torch_batchprocessing, benchmark_torch_realtimeprocessing
+from utils import benchmark_torch_batchprocessing
 
 class CIFARModelWrapper():
     def __init__(self, model_name):
@@ -69,16 +69,27 @@ class ImageNetModelWrapper():
         self.model.to(self.device)
 
     def features(self, X):
-        if self.model.__class__.__name__ == "MobileNetV3":
+        if self.model.__class__.__name__ == "MobileNetV3" or self.model.__class__.__name__ == "EfficientNet":
             x = self.model.features(X)
             x = self.model.avgpool(x)
             return x.flatten(1)
+        elif self.model.__class__.__name__ == "ShuffleNetV2":
+            x = self.model.conv1(X)
+            x = self.model.maxpool(x)
+            x = self.model.stage2(x)
+            x = self.model.stage3(x)
+            x = self.model.stage4(x)
+            x = self.model.conv5(x)
+            x = x.mean([2, 3])  # globalpool
+            return x
         else:
             return X.flatten()
     
     def classifier(self, X):
-        if self.model.__class__.__name__ == "MobileNetV3":
+        if self.model.__class__.__name__ == "MobileNetV3" or self.model.__class__.__name__ == "EfficientNet":
             return self.model.classifier(X)
+        elif self.model.__class__.__name__ == "ShuffleNetV2":
+            return self.model.fc(X)
         else:
             return self.model(X)
 
@@ -112,7 +123,7 @@ def main(args):
         fbig = ImageNetModelWrapper(args["big"])
         fsmall = ImageNetModelWrapper(args["small"])
         
-        if not ("mobilenet_v3_small" in args["small"]):
+        if args["small"] != "mobilenet_v3_small" and args["small"] != "efficientnet_b0":
             print("Warning: This script only supports MobileNetV3 as the small model for feature extraction. The rejector will now be traiend on the raw data.")
     else:
         raise ValueError(f"Received wrong dataset. Currently supported are `cifar100' and `imagenet', but I got {args['data']}")
@@ -141,13 +152,11 @@ def main(args):
 
     for i, (train_idx, test_idx) in enumerate(kf.split(range(n_data))):
         train_dataset = Subset(dataset, train_idx)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["b"], shuffle=False, pin_memory=True, num_workers = 6)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["M"], shuffle=False, pin_memory=True, num_workers = 4)
         test_dataset = Subset(dataset, test_idx)
 
-        print(f"[{i+1}]/[{args['x']}] Getting predictions of small and big model")
-        big_preds = get_predictions(fbig, train_loader, False)
-        small_preds, X = get_predictions(fsmall, train_loader, True)
-        Y = [yi for _, yb in train_loader for yi in yb]
+        small_preds, X, Y = get_predictions(fsmall, train_loader, True, True, pbar_desc=f"[{i+1}]/[{args['x']}] Getting predictions of small model")
+        big_preds = get_predictions(fbig, train_loader, False, False, pbar_desc=f"[{i+1}]/[{args['x']}] Getting predictions of big model")
 
         for tm in ["confidence", "virtual-labels"]:
             for c in [True, False]:
@@ -166,11 +175,11 @@ def main(args):
                             "calibration":c,
                             "run":i,
                             "p":p,
-                            **benchmark_torch_batchprocessing(test_dataset, re, args["b"], "", jetson=measure_jetson_power,verbose=False)
+                            **benchmark_torch_batchprocessing(test_dataset, re, args["M"], "", jetson=measure_jetson_power,verbose=False)
                         }
                     )
         
-        print(f"[{i+1}]/[{args['x']}] Benchmarking small and big model")
+        print(f"[{i+1}]/[{args['x']}] Benchmarking small model")
         metrics.append({
                 "model":"small",
                 "small":args["small"],
@@ -181,10 +190,11 @@ def main(args):
                 "calibration":None,
                 "run":i,
                 "p":None,
-                **benchmark_torch_batchprocessing(test_dataset, fsmall, args["b"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
+                **benchmark_torch_batchprocessing(test_dataset, fsmall, args["M"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
             }
         )
 
+        print(f"[{i+1}]/[{args['x']}] Benchmarking big model")
         metrics.append({
                 "model":"big",
                 "small":args["small"],
@@ -195,12 +205,13 @@ def main(args):
                 "calibration":None,
                 "run":i,
                 "p":None,
-                **benchmark_torch_batchprocessing(test_dataset, fbig, args["b"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
+                **benchmark_torch_batchprocessing(test_dataset, fbig, args["M"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
             }
         )
+        print("")
 
-    with open(args["out"], "w") as outfile:
-        json.dump(metrics, outfile)
+    with open(os.path.join(args["out"], f"{args['data']}.json"), "w") as outfile:
+            json.dump(metrics, outfile)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Script for running exeriments on torch-based rejectors, i.e. on CIFAR100 and ImageNet.')
@@ -210,10 +221,11 @@ if __name__ == '__main__':
     parser.add_argument("--big", help='Big model to be used. For cifar100 models form chenyaofo/pytorch-cifar-models are supported. For imagenet, models form torchvision.models are supported.', required=False, type=str, default="cifar100_repvgg_a2")
     parser.add_argument("--rejector", help='Rejector to be used. Currently dt (DecisionTreeClassifier with max_depth = None), rf (RandomForestClassifier with 16 trees and max_depth = None) are supported', required=False, type=str, default="dt")
     parser.add_argument("-e", help='If true, energy is measured. This only works on Jetson Boards.', action='store_true')
-    parser.add_argument("-b", help='Batch size durign deployment.', required=False, type=int, default=32)
+    parser.add_argument("-M", help='Batch size durign deployment.', required=False, type=int, default=32)
     parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
     parser.add_argument("-p", help='Budgets to try.', required=False, nargs='+', default=list(np.arange(0.0, 1.05, 0.05)))
-    parser.add_argument("--out", help='Name / Path of output json.', required=False, type=str, default="cifar100.json")
+    parser.add_argument("--out", help='Folder in which to store the output file. Name will be the same as the dataset name.', required=False, type=str, default=".")
+
     args = vars(parser.parse_args())
     
     main(args)

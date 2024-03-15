@@ -197,29 +197,11 @@ def get_dataset(dataset, tmpdir = None):
         df = df.drop(["target"], axis=1)
         X = df.values.astype(np.float64)
     elif dataset == "covtype":
-        if tmpdir is None:
-            out_path = os.path.join(tempfile.gettempdir(), "data", "covertype.csv.gz")
-        else:
-            out_path = os.path.join(tmpdir, "data", "covertype")
-        data_path = download("https://archive.ics.uci.edu/ml/machine-learning-databases/covtype/covtype.data.gz", out_path)
+        data_path = download("https://archive.ics.uci.edu/ml/machine-learning-databases/covtype/covtype.data.gz", "covtype.data.gz", tmpdir)
 
         df = pd.read_csv(data_path)
         X = df.values[:,:-1].astype(np.float64)
         Y = df.values[:,-1] - 1 # Make sure classes start with index 0 instead of index 1 
-    elif dataset == "bincovtype":
-        if tmpdir is None:
-            out_path = os.path.join(tempfile.gettempdir(), "data", "covertype.csv.gz")
-        else:
-            out_path = os.path.join(tmpdir, "data", "covertype")
-        data_path = download("https://archive.ics.uci.edu/ml/machine-learning-databases/covtype/covtype.data.gz", out_path)
-
-        df = pd.read_csv(data_path)
-        Y = df.values[:,-1] - 1
-        X = df.values[:,:-1].astype(np.float64)
-        idx = np. where( (Y == 0) | (Y==1) )
-
-        X = X[ idx ]
-        Y = Y[ idx ]
     elif dataset == "fashion" or dataset == "mnist":
         def load_mnist(path, kind='train'):
             # Taken from https://github.com/zalandoresearch/fashion-mnist/blob/master/utils/mnist_reader.py

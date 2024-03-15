@@ -4,12 +4,13 @@ import torch
 import tqdm
 from sklearn.tree import DecisionTreeClassifier
 
-def get_predictions(f, data_loader, return_embeddings = False):
+def get_predictions(f, data_loader, return_embeddings = False, return_labels = False, pbar_desc = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     all_preds = []
     all_emebddings = []
-    for xbatch, _ in data_loader:
+    labels = []
+    for xbatch, ybatch in tqdm.tqdm(data_loader, desc=pbar_desc, disable=pbar_desc is None):
         xbatch = xbatch.to(device)
         with torch.no_grad():
             if return_embeddings:
@@ -19,15 +20,24 @@ def get_predictions(f, data_loader, return_embeddings = False):
             else:
                 preds = f(xbatch)
             
+            if return_labels:
+                labels.extend([yi for yi in ybatch])
+
             all_preds.append(preds)
     
     all_preds = torch.vstack(all_preds).cpu().numpy()
 
     if return_embeddings:
         all_emebddings = torch.vstack(all_emebddings).cpu().numpy()
-        return all_preds, all_emebddings
+        if return_labels:
+            return all_preds, all_emebddings, labels
+        else:
+            return all_preds, all_emebddings
     else:
-        return all_preds
+        if return_labels:
+            return all_preds, labels
+        else:
+            return all_preds
 
 class TorchRejectionEnsemble():
     def __init__(self, fsmall, fbig, p, rejector, train_method="confidence", calibration = True):

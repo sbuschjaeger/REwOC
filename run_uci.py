@@ -27,16 +27,35 @@ from RejectionEnsemble import RejectionEnsemble
 from utils import benchmark_batchprocessing
 
 def main(args):
-    #big_model = AdaBoostClassifier(n_estimators=128,algorithm="SAMME.R")
-    big_model = RandomForestClassifier(n_estimators=128, max_depth=None)
-    #small_model = RandomForestClassifier(n_estimators=16, max_depth=None)
-    #small_model = LogisticRegression()
-    small_model = AdaBoostClassifier(n_estimators=5,algorithm="SAMME.R",estimator=DecisionTreeClassifier(max_depth=2))
-    # small_model = DecisionTreeClassifier(max_depth = 5)
-    # rejector = LogisticRegression()
-    #rejector = RandomForestClassifier(n_estimators=16, max_depth=None)
-    rejector = DecisionTreeClassifier(max_depth=None)
-    # rejector = DecisionTreeClassifier(max_depth=None)
+    # rf + dt depth = 1 + linear
+    # dt 2 + dt 1 + linear => bank + eeg
+    # dt 3 + dt 1 + linear => eeg
+    if args["big"] == "rf":
+        big_model = RandomForestClassifier(n_estimators=128, max_depth=None)
+    elif args["big"] == "dt2":
+        big_model = DecisionTreeClassifier(max_depth=2)
+    elif args["big"] == "dt3":
+        big_model = DecisionTreeClassifier(max_depth=3)
+    else:
+        raise ValueError(f"Unknown big model given: rf are supported but received {args['big']} ")
+    
+    if args["small"] == "rf":
+        small_model = RandomForestClassifier(n_estimators=16, max_depth=None)    
+    elif args["small"] == "boosting":
+        small_model = AdaBoostClassifier(n_estimators=5,algorithm="SAMME.R",estimator=DecisionTreeClassifier(max_depth=2))
+    elif args["small"] == "dt":
+        small_model = DecisionTreeClassifier(max_depth=1)
+    else:
+        raise ValueError(f"Unknown small model given: boosting, rf are supported but received {args['small']} ")
+    
+    if args["rejector"] == "dt":
+        rejector = DecisionTreeClassifier(max_depth=None)
+    elif args["rejector"] == "rf":
+        rejector = RandomForestClassifier(n_estimators=16, max_depth=None)
+    elif args["rejector"] == "linear":
+        rejector = LogisticRegression(solver="liblinear")
+    else:
+        raise ValueError(f"Unknown rejector given: dt, rf, linear are supported but received {args['rejector']} ")
 
     if not isinstance(args["data"], list):
         datasets = [args["data"]]
@@ -84,7 +103,7 @@ def main(args):
                                     "calibration":c,
                                     "run":i,
                                     "p":p,
-                                    **benchmark_batchprocessing(X_test, Y_test, re, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=measure_jetson_power,verbose=False)
+                                    **benchmark_batchprocessing(X_test, Y_test, re, args["M"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=measure_jetson_power,verbose=False)
                                 }
                             )
                     else:
@@ -101,7 +120,7 @@ def main(args):
                                     "calibration":c,
                                     "run":i,
                                     "p":p,
-                                    **benchmark_batchprocessing(X_test, Y_test, re, args["b"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=measure_jetson_power,verbose=False)
+                                    **benchmark_batchprocessing(X_test, Y_test, re, args["M"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=measure_jetson_power,verbose=False)
                                 }
                             )
 
@@ -113,7 +132,7 @@ def main(args):
                     "calibration":None,
                     "run":i,
                     "p":None,
-                    **benchmark_batchprocessing(X_test, Y_test, fsmall, args["b"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
+                    **benchmark_batchprocessing(X_test, Y_test, fsmall, args["M"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
                 }
             )
 
@@ -125,9 +144,11 @@ def main(args):
                     "calibration":None,
                     "run":i,
                     "p":None,
-                    **benchmark_batchprocessing(X_test, Y_test, fbig, args["b"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
+                    **benchmark_batchprocessing(X_test, Y_test, fbig, args["M"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
                 }
             )
+            print("")
+
 
         with open(os.path.join(args["out"], f"{d}.json"), "w") as outfile:
             json.dump(metrics, outfile)
@@ -135,12 +156,15 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run a multi-label classification problem on a series of patients. Training and evaluation are performed on a per-patient basis, i.e. we train on patients {1,2,3} and test on patient 4.')
     parser.add_argument("--data", help='Name of dataset to be used', required=False, nargs="+", default=["magic"])
-    parser.add_argument("--tmp", help='Temporarly folder', required=False, type=str, default="./data")
-    parser.add_argument("-b", help='Batch size.', required=False, type=int, default=32)
+    parser.add_argument("--tmp", help='Path to the data. The data will automatically be downloaded to the given folder if not found.', required=False, type=str, default="./data")
+    parser.add_argument("--small", help='Small model to be used. Can be dt, rf, linear.', required=False, type=str, default="linear")
+    parser.add_argument("--big", help="Can be dt, rf, linear.", required=False, type=str, default="rf")
+    parser.add_argument("--rejector", help='Rejector to be used. Currently dt (DecisionTreeClassifier with max_depth = None), rf (RandomForestClassifier with 16 trees and max_depth = None), linear are supported', required=False, type=str, default="dt")
+    parser.add_argument("-M", help='Batch size.', required=False, type=int, default=32)
     parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
     parser.add_argument("-e", help='If true, energy is measured.', action='store_true')
     parser.add_argument("-p", help='Budget to try.', required=False, nargs='+', default=[0, 0.5, 1.0])
-    parser.add_argument("--out", help='Name / Path of output csv.', required=False, type=str, default=".")
+    parser.add_argument("--out", help='Folder in which to store the output file. Name will be the same as the dataset name.', required=False, type=str, default=".")
     args = vars(parser.parse_args())
     
     main(args)
