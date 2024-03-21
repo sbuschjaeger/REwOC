@@ -27,9 +27,7 @@ from RejectionEnsemble import RejectionEnsemble
 from utils import JetsonMonitor, benchmark_batchprocessing
 
 def main(args):
-    # rf + dt depth = 1 + linear
-    # dt 2 + dt 1 + linear => bank + eeg
-    # dt 3 + dt 1 + linear => eeg
+    # Prepare the big model
     if args["big"] == "rf":
         big_model = RandomForestClassifier(n_estimators=128, max_depth=None, n_jobs=8)
     elif args["big"] == "dt2":
@@ -39,6 +37,7 @@ def main(args):
     else:
         raise ValueError(f"Unknown big model given: rf are supported but received {args['big']} ")
     
+    # Prepare the small model
     if args["small"] == "rf":
         small_model = RandomForestClassifier(n_estimators=16, max_depth=None, n_jobs=8)    
     elif args["small"] == "boosting":
@@ -48,6 +47,7 @@ def main(args):
     else:
         raise ValueError(f"Unknown small model given: boosting, rf are supported but received {args['small']} ")
     
+    # Prepare the rejector
     if args["rejector"] == "dt":
         rejector = DecisionTreeClassifier(max_depth=None)
     elif args["rejector"] == "rf":
@@ -57,16 +57,19 @@ def main(args):
     else:
         raise ValueError(f"Unknown rejector given: dt, rf, linear are supported but received {args['rejector']} ")
 
+    # Prepare datasets to be used during experiments
     if not isinstance(args["data"], list):
         datasets = [args["data"]]
     else:
         datasets = args["data"]
 
+    # Prepare budgets to be used during experiments
     if not isinstance(args["p"], list):
         Ps = [float(args["p"])]
     else:
         Ps = [float(p) for p in args["p"]]
 
+    # Measure energy?
     if args["e"]:
         jetson = JetsonMonitor()
         jetson.start()
@@ -74,11 +77,13 @@ def main(args):
         jetson = None
 
     for d in datasets:
+        # Get dataset and prepare cross-validation
         X,Y = get_dataset(d, args["tmp"])
         kf = KFold(n_splits=args["x"], shuffle=True)
         
         metrics = []
         for i, (train_idx, test_idx) in enumerate(kf.split(X)):
+            # Train small and big model
             fbig = clone(big_model)
             fsmall = clone(small_model)
 
@@ -88,8 +93,10 @@ def main(args):
             print(f"{d}: [{i+1}]/[{args['x']}] Fitting small model")
             fsmall.fit(X_train,y_train)
 
+            # Prepare training data for rejector 
             X_train_re, X_test, Y_train_re, Y_test = train_test_split(X[test_idx], Y[test_idx], test_size = 0.5)
 
+            # Benchmark all four combinations
             for tm in ["confidence", "virtual-labels"]:
                 for c in [True, False]:
                     print(f"{d}: [{i+1}]/[{args['x']}] Running experiments for tm = {tm} {'with calibration' if c else 'without calibration'}")
@@ -129,6 +136,7 @@ def main(args):
                                 }
                             )
 
+            # Benchmark small and big model as well
             metrics.append({
                     "model":"small",
                     "batch":True,

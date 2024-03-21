@@ -100,6 +100,7 @@ class ImageNetModelWrapper():
 
 def main(args):
     if args["data"] == "cifar100":
+        # Prepare CIFAR 100 data and small/big model
         transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5071, 0.4867, 0.4408], std=[0.2675, 0.2565, 0.2761]),
@@ -113,6 +114,7 @@ def main(args):
         if not ("cifar100_mobilenetv2" in args["small"] or "cifar100_shufflenetv2" in args["small"]):
             print("Warning: This script only supports mobilenetv2 and shufflenetv2 variants as the small model for feature extraction. The rejector will now be traiend on the raw data.")
     elif args["data"] == "imagenet":
+        # Prepare ImageNet Data and small/big model
         transform = transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
@@ -130,6 +132,7 @@ def main(args):
     else:
         raise ValueError(f"Received wrong dataset. Currently supported are `cifar100' and `imagenet', but I got {args['data']}")
     
+    # Prepare rejector
     if args["rejector"] == "dt":
         rejector = DecisionTreeClassifier(max_depth=None)
     elif args["rejector"] == "rf":
@@ -141,14 +144,17 @@ def main(args):
         raise ValueError(f"Given rejector not supported. Currently supported are dt,linear and rf, but I got {args['rejector']}")
     rejector_name = args["rejector"]
 
+    # prepare cross validation
     kf = KFold(n_splits=args["x"], shuffle=True)
     metrics = []
     
+    # Prepare budgets to be used during experiments
     if not isinstance(args["p"], list):
         Ps = [float(args["p"])]
     else:
         Ps = [float(p) for p in args["p"]]
 
+    # Measure energy?
     if args["e"]:
         jetson = JetsonMonitor()
         jetson.start()
@@ -162,9 +168,11 @@ def main(args):
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args["M"], shuffle=False, pin_memory=True, num_workers = 4)
         test_dataset = Subset(dataset, test_idx)
 
+        # Cache the predictions of the small and big model for faster training of the rejectors. This is not part of the benchmarking because we benchmark model application and not rejector training
         small_preds, X, Y = get_predictions(fsmall, train_loader, True, True, pbar_desc=f"[{i+1}]/[{args['x']}] Getting predictions of small model")
         big_preds = get_predictions(fbig, train_loader, False, False, pbar_desc=f"[{i+1}]/[{args['x']}] Getting predictions of big model")
 
+        # Benchmark all four combinations
         for tm in ["confidence", "virtual-labels"]:
             for c in [True, False]:
                 for p in tqdm.tqdm(Ps, total=len(Ps), desc=f"[{i+1}]/[{args['x']}] Running experiments for {tm} {'with calibration' if c else 'without calibration'}"):
@@ -186,6 +194,7 @@ def main(args):
                         }
                     )
         
+        # Benchmark small and big model as well
         print(f"[{i+1}]/[{args['x']}] Benchmarking small model")
         metrics.append({
                 "model":"small",
