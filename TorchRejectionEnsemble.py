@@ -1,10 +1,24 @@
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 import torch
 import tqdm
-from sklearn.tree import DecisionTreeClassifier
 
-def get_predictions(f, data_loader, return_embeddings = False, return_labels = False, pbar_desc = None):
+def get_predictions(f, data_loader, return_embeddings=False, return_labels=False, pbar_desc=None):
+    """
+    Get predictions from a model on a given data loader.
+
+    Args:
+        f (ImageNetModelWrapper or CIFARModelWrapper): The model to use for predictions.
+        data_loader (DataLoader): The data loader containing the input data.
+        return_embeddings (bool, optional): Whether to return the embeddings. Defaults to False.
+        return_labels (bool, optional): Whether to return the labels. Defaults to False.
+        pbar_desc (str, optional): Description for the tqdm progress bar. Defaults to None.
+
+    Returns:
+        tuple or ndarray: The predictions. If `return_embeddings` is True, returns a tuple
+            containing the predictions, embeddings, and labels (if `return_labels` is True).
+            If `return_embeddings` is False, returns the predictions and labels (if `return_labels` is True).
+    """
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     all_preds = []
@@ -41,6 +55,19 @@ def get_predictions(f, data_loader, return_embeddings = False, return_labels = F
 
 class TorchRejectionEnsemble():
     def __init__(self, fsmall, fbig, p, rejector, train_method="confidence", calibration = True):
+        """
+        Initialize a RejectionEnsemble object.
+
+        Args:
+            fsmall: The already trained small model. This object must offer classifier and features method 
+            fbig: The already big small model. This object must offer classifier method 
+            rejector: The rejector object used for rejection. This object must offer a fit and predict_proba method similar to scikit-learn models
+            train_method (str, optional): The training method to use. Defaults to "confidence".
+            calibration (bool, optional): Whether to perform calibration. Defaults to True.
+
+        Raises:
+            AssertionError: If the train_method is not one of ["confidence", "virtual-labels"].
+        """
         self.fsmall = fsmall
         self.fbig = fbig
         self.rejector = rejector
@@ -50,17 +77,42 @@ class TorchRejectionEnsemble():
         assert self.train_method in ["confidence", "virtual-labels"]
 
     def fit(self, dataset_loader):
+        """
+        Fits the TorchRejectionEnsemble model to the given dataset.
+
+        Args:
+            dataset_loader (torch.utils.data.DataLoader): The data loader for the dataset.
+
+        Returns:
+            The result of the _fit method.
+
+        """
         preds_small, X = get_predictions(self.fsmall, dataset_loader, True)
         Y = [yi for _, yb in dataset_loader for yi in yb]
 
         if self.train_method != "confidence":
             preds_big = get_predictions(self.fbig, dataset_loader, False)
         else:
-            preds_big= None
+            preds_big = None
 
         return self._fit(X, Y, preds_small, preds_big)
 
     def _fit(self, X, Y, preds_small, preds_big):
+        """
+        Fits the rejection ensemble model using the given inputs. The return value can be ignored if the object is maintained after calling fit.
+
+        Parameters:
+        - X: The input data of shape (n_samples, n_features).
+        - Y: The target labels of shape (n_samples,).
+        - preds_small: The predictions of the small model of shape (n_samples, n_classes).
+        - preds_big: The predictions of the big model of shape (n_samples, n_classes).
+
+        Returns:
+        - fsmall: The fitted small model.
+        - fbig: The fitted big model.
+        - rejector: The fitted rejector model, or None if no rejector is used.
+        """
+            
         if self.train_method == "confidence":
             mask = preds_small.argmax(1) != Y
             y = preds_small.max(1)
@@ -100,7 +152,18 @@ class TorchRejectionEnsemble():
         return self.fsmall, self.fbig, self.rejector
 
 
-    def predict_proba(self, T, return_cnt = False):
+    def predict_proba(self, T, return_cnt=False):
+        """
+        Predicts the class probabilities for the input data.
+
+        Args:
+            T (torch.Tensor): The input data to be predicted.
+            return_cnt (bool, optional): Whether to return the count of rejected samples. Defaults to False.
+
+        Returns:
+            torch.Tensor: The predicted class probabilities.
+            int: The count of rejected samples if `return_cnt` is True, otherwise None.
+        """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         T = T.to(device)
 

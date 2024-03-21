@@ -1,11 +1,21 @@
 import numpy as np
-from sklearn.linear_model import LogisticRegression
-import torch
-import tqdm
-from sklearn.tree import DecisionTreeClassifier
 
 class RejectionEnsemble():
-    def __init__(self, fsmall, fbig, p, rejector, train_method="confidence", calibration = True):
+    def __init__(self, fsmall, fbig, p, rejector, train_method="confidence", calibration=True):
+        """
+        Initialize a RejectionEnsemble object.
+
+        Args:
+            fsmall: The already trained small model. This object must offer predict_proba method similar to scikit-learn models
+            fbig: The already big small model. This object must offer predict_proba method similar to scikit-learn models
+            p (float): The probability threshold for rejection.
+            rejector: The rejector object used for rejection. This object must offer a fit and predict_proba method similar to scikit-learn models
+            train_method (str, optional): The training method to use. Defaults to "confidence".
+            calibration (bool, optional): Whether to perform calibration. Defaults to True.
+
+        Raises:
+            AssertionError: If the train_method is not one of ["confidence", "virtual-labels"].
+        """
         self.fsmall = fsmall
         self.fbig = fbig
         self.rejector = rejector
@@ -15,6 +25,18 @@ class RejectionEnsemble():
         assert self.train_method in ["confidence", "virtual-labels"]
 
     def fit(self, X, Y):
+        """
+        Fits the RejectionEnsemble model to the given training data. The return value can be ignored if the object is maintained after calling fit.
+
+        Parameters:
+        - X: The input features of shape (n_samples, n_features).
+        - Y: The target labels of shape (n_samples,).
+
+        Returns:
+        - fsmall: The fitted small model, which has been provided in the constructor.
+        - fbig: The fitted big model, which has been provided in the constructor
+        - rejector: The fitted rejector model. None if no rejector was fitted.
+        """
         preds_small = self.fsmall.predict_proba(X)
         self.n_classes_ = len(set(Y))
 
@@ -22,12 +44,10 @@ class RejectionEnsemble():
             mask = preds_small.argmax(1) != Y
             y = preds_small.max(1)
             y[mask] = 0
-            #y = [preds_small[i].max() if preds_small[i].argmax() == ybatch[i] else 0 for i in range(preds_small.shape[0])]
             targets = y
 
             P = int(np.floor(self.p * X.shape[0]))
             if P > 0 and P < X.shape[0] and np.unique(Y).shape[0] > 1: 
-                # Check if actually use the small and the big model 
                 indices_of_bottom_K = np.argsort(Y)[:P]
                 targets = np.zeros_like(Y)
                 targets[indices_of_bottom_K] = 1
@@ -56,7 +76,25 @@ class RejectionEnsemble():
         
         return self.fsmall, self.fbig, self.rejector
 
-    def predict_proba(self, T, return_cnt = False):
+    def predict_proba(self, T, return_cnt=False):
+        """
+        Predict class probabilities for the input samples.
+
+        Parameters:
+            T (array-like): The input samples of shape (n_samples, n_features).
+            return_cnt (bool, optional): Whether to return the useage of the big model. Default is False.
+
+        Returns:
+            array-like or tuple: If `return_cnt` is False, returns an array-like object containing the predicted class probabilities for each sample.
+                                 If `return_cnt` is True, returns a tuple containing the predicted class probabilities and the useage count of big model.
+
+        Raises:
+            None
+
+        Notes:
+            - If `self.rejector` is None, the method uses the predictions from either `self.fbig` or `self.fsmall` models based on the value of `self.p`.
+            - If `self.rejector` is not None, the method uses the predictions from `self.rejector` model and applies rejection calibration if `self.calibration` is True.
+        """
         if self.rejector is None:
             if self.p == 1:
                 preds, cnt = self.fbig.predict_proba(T), T.shape[0]

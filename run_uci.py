@@ -163,17 +163,17 @@ def main(args):
         jetson.join()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run a multi-label classification problem on a series of patients. Training and evaluation are performed on a per-patient basis, i.e. we train on patients {1,2,3} and test on patient 4.')
+    parser = argparse.ArgumentParser(description='Script for running exeriments on sklearn-based rejectors and the UCI datasets.')
     parser.add_argument("--data", help='Name of dataset to be used', required=False, nargs="+", default=["magic"])
     parser.add_argument("--tmp", help='Path to the data. The data will automatically be downloaded to the given folder if not found.', required=False, type=str, default="./data")
-    parser.add_argument("--small", help='Small model to be used. Can be dt, rf, linear.', required=False, type=str, default="linear")
-    parser.add_argument("--big", help="Can be dt, rf, linear.", required=False, type=str, default="rf")
+    parser.add_argument("--small", help='Small model to be used. Can be dt, rf, boosting.', required=False, type=str, default="dt")
+    parser.add_argument("--big", help="Can be dt2, dt3, rf.", required=False, type=str, default="rf")
     parser.add_argument("--rejector", help='Rejector to be used. Currently dt (DecisionTreeClassifier with max_depth = None), rf (RandomForestClassifier with 16 trees and max_depth = None), linear are supported', required=False, type=str, default="dt")
     parser.add_argument("-M", help='Batch size.', required=False, type=int, default=32)
-    parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
-    parser.add_argument("-e", help='If true, energy is measured.', action='store_true')
+    parser.add_argument("-x", help='Number of cross-validation splits.', required=False, type=int, default=5)
+    parser.add_argument("-e", help='If true, energy is measured. This only works on Jetson Boards.', action='store_true')
     parser.add_argument("-p", help='Budget to try.', required=False, nargs='+', default=[0, 0.5, 1.0])
-    parser.add_argument("--out", help='Folder in which to store the output file. Name will be the same as the dataset name.', required=False, type=str, default=".")
+    parser.add_argument("--out", help='Folder in which to store the output file. Name will be the same as the dataset name, e.g. magic.json.', required=False, type=str, default=".")
     args = vars(parser.parse_args())
     
     main(args)

@@ -1,8 +1,8 @@
-- ../pytorch_wheels/torch-2.0.0a0+8aa34602.nv23.03-cp38-cp38-linux_aarch64.whl 
-- ../pytorch_wheels/torchvision-0.15.1a0+42759b1-cp38-cp38-linux_aarch64.whl
+- torch 
+- torchvision 
+- torchaudio
 - numpy
 - pandas
 - matplotlib
 - jupyterlab
 - scikit-learn
-- jetson-stats==4.2.3

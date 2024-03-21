@@ -26,6 +26,7 @@ from TorchRejectionEnsemble import TorchRejectionEnsemble, get_predictions
 from utils import JetsonMonitor, benchmark_torch_batchprocessing
 
 class CIFARModelWrapper():
+    # A wrapper around the CIFAR100 models to provide the common interface featuring a features() and classifier() function
     def __init__(self, model_name):
         self.model = torch.hub.load("chenyaofo/pytorch-cifar-models", model_name, pretrained=True, verbose=False)
         self.model.eval()
@@ -62,6 +63,7 @@ class CIFARModelWrapper():
         return self.model(x.to(self.device))
 
 class ImageNetModelWrapper():
+    # A wrapper around the ImageNet models to provide the common interface featuring a features() and classifier() function
     def __init__(self, model_name):
         self.model = get_model(model_name, weights="DEFAULT")
         self.model.eval()
@@ -216,20 +218,24 @@ def main(args):
         print("")
 
     with open(os.path.join(args["out"], f"{args['data']}.json"), "w") as outfile:
-            json.dump(metrics, outfile)
+        json.dump(metrics, outfile)
+    
+    if jetson:
+        jetson.stop()
+        jetson.join()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Script for running exeriments on torch-based rejectors, i.e. on CIFAR100 and ImageNet.')
     parser.add_argument("--data", help='Dataset used for the experiments. Currently cifar100 and imagenet are supported.', required=False, type=str, default="cifar100")
     parser.add_argument("--tmp", help='Path to the data. In case of cifar100, data will automatically be downloaded to the given folder if not found. In case of imagenet, it is assuemd that the validation data is already donwnlaoded to the given folder.', required=False, type=str, default=".")
-    parser.add_argument("--small", help='Small model to be used. For cifar100 models form chenyaofo/pytorch-cifar-models are supported. For imagenet, models form torchvision.models are supported.', required=False, type=str, default="cifar100_shufflenetv2_x0_5")
-    parser.add_argument("--big", help='Big model to be used. For cifar100 models form chenyaofo/pytorch-cifar-models are supported. For imagenet, models form torchvision.models are supported.', required=False, type=str, default="cifar100_repvgg_a2")
-    parser.add_argument("--rejector", help='Rejector to be used. Currently dt (DecisionTreeClassifier with max_depth = None), rf (RandomForestClassifier with 16 trees and max_depth = None) are supported', required=False, type=str, default="dt")
+    parser.add_argument("--small", help='Small model to be used. For cifar100, models form chenyaofo/pytorch-cifar-models are supported. For imagenet, models form torchvision.models are supported.', required=False, type=str, default="cifar100_shufflenetv2_x0_5")
+    parser.add_argument("--big", help='Big model to be used. For cifar100, models form chenyaofo/pytorch-cifar-models are supported. For imagenet, models form torchvision.models are supported.', required=False, type=str, default="cifar100_repvgg_a2")
+    parser.add_argument("--rejector", help='Rejector to be used. Currently dt (DecisionTreeClassifier with max_depth = None), rf (RandomForestClassifier with 16 trees and max_depth = None) and linear LogisticRegression are supported', required=False, type=str, default="dt")
     parser.add_argument("-e", help='If true, energy is measured. This only works on Jetson Boards.', action='store_true')
-    parser.add_argument("-M", help='Batch size durign deployment.', required=False, type=int, default=32)
-    parser.add_argument("-x", help='Number of x-val splits.', required=False, type=int, default=5)
+    parser.add_argument("-M", help='Batch size during deployment.', required=False, type=int, default=32)
+    parser.add_argument("-x", help='Number of cross-validation splits.', required=False, type=int, default=5)
     parser.add_argument("-p", help='Budgets to try.', required=False, nargs='+', default=list(np.arange(0.0, 1.05, 0.05)))
-    parser.add_argument("--out", help='Folder in which to store the output file. Name will be the same as the dataset name.', required=False, type=str, default=".")
+    parser.add_argument("--out", help='Folder in which to store the output file. Name will be the same as the dataset name, e.g. cifar100.json.', required=False, type=str, default=".")
 
     args = vars(parser.parse_args())
     
