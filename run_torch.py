@@ -23,7 +23,7 @@ import pandas as pd
 from torch.utils.data import Subset
 
 from TorchRejectionEnsemble import TorchRejectionEnsemble, get_predictions
-from utils import benchmark_torch_batchprocessing
+from utils import JetsonMonitor, benchmark_torch_batchprocessing
 
 class CIFARModelWrapper():
     def __init__(self, model_name):
@@ -147,7 +147,12 @@ def main(args):
     else:
         Ps = [float(p) for p in args["p"]]
 
-    measure_jetson_power = args["e"]
+    if args["e"]:
+        jetson = JetsonMonitor()
+        jetson.start()
+    else:
+        jetson = None
+
     n_data = len(dataset)
 
     for i, (train_idx, test_idx) in enumerate(kf.split(range(n_data))):
@@ -175,7 +180,7 @@ def main(args):
                             "calibration":c,
                             "run":i,
                             "p":p,
-                            **benchmark_torch_batchprocessing(test_dataset, re, args["M"], "", jetson=measure_jetson_power,verbose=False)
+                            **benchmark_torch_batchprocessing(test_dataset, re, args["M"], "", jetson=jetson,verbose=False)
                         }
                     )
         
@@ -190,7 +195,7 @@ def main(args):
                 "calibration":None,
                 "run":i,
                 "p":None,
-                **benchmark_torch_batchprocessing(test_dataset, fsmall, args["M"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
+                **benchmark_torch_batchprocessing(test_dataset, fsmall, args["M"], f"{i+1}/{args['x']} Applying small model", jetson=jetson,verbose=False)
             }
         )
 
@@ -205,7 +210,7 @@ def main(args):
                 "calibration":None,
                 "run":i,
                 "p":None,
-                **benchmark_torch_batchprocessing(test_dataset, fbig, args["M"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
+                **benchmark_torch_batchprocessing(test_dataset, fbig, args["M"], f"{i+1}/{args['x']} Applying big model", jetson=jetson,verbose=False)
             }
         )
         print("")

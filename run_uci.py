@@ -24,14 +24,14 @@ from sklearn.base import clone
 
 from Datasets import get_dataset
 from RejectionEnsemble import RejectionEnsemble
-from utils import benchmark_batchprocessing
+from utils import JetsonMonitor, benchmark_batchprocessing
 
 def main(args):
     # rf + dt depth = 1 + linear
     # dt 2 + dt 1 + linear => bank + eeg
     # dt 3 + dt 1 + linear => eeg
     if args["big"] == "rf":
-        big_model = RandomForestClassifier(n_estimators=128, max_depth=None)
+        big_model = RandomForestClassifier(n_estimators=128, max_depth=None, n_jobs=8)
     elif args["big"] == "dt2":
         big_model = DecisionTreeClassifier(max_depth=2)
     elif args["big"] == "dt3":
@@ -40,7 +40,7 @@ def main(args):
         raise ValueError(f"Unknown big model given: rf are supported but received {args['big']} ")
     
     if args["small"] == "rf":
-        small_model = RandomForestClassifier(n_estimators=16, max_depth=None)    
+        small_model = RandomForestClassifier(n_estimators=16, max_depth=None, n_jobs=8)    
     elif args["small"] == "boosting":
         small_model = AdaBoostClassifier(n_estimators=5,algorithm="SAMME.R",estimator=DecisionTreeClassifier(max_depth=2))
     elif args["small"] == "dt":
@@ -51,7 +51,7 @@ def main(args):
     if args["rejector"] == "dt":
         rejector = DecisionTreeClassifier(max_depth=None)
     elif args["rejector"] == "rf":
-        rejector = RandomForestClassifier(n_estimators=16, max_depth=None)
+        rejector = RandomForestClassifier(n_estimators=16, max_depth=None, n_jobs=8)
     elif args["rejector"] == "linear":
         rejector = LogisticRegression(solver="liblinear")
     else:
@@ -67,12 +67,17 @@ def main(args):
     else:
         Ps = [float(p) for p in args["p"]]
 
+    if args["e"]:
+        jetson = JetsonMonitor()
+        jetson.start()
+    else:
+        jetson = None
+
     for d in datasets:
         X,Y = get_dataset(d, args["tmp"])
         kf = KFold(n_splits=args["x"], shuffle=True)
         
         metrics = []
-        measure_jetson_power = args["e"]
         for i, (train_idx, test_idx) in enumerate(kf.split(X)):
             fbig = clone(big_model)
             fsmall = clone(small_model)
@@ -103,7 +108,7 @@ def main(args):
                                     "calibration":c,
                                     "run":i,
                                     "p":p,
-                                    **benchmark_batchprocessing(X_test, Y_test, re, args["M"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=measure_jetson_power,verbose=False)
+                                    **benchmark_batchprocessing(X_test, Y_test, re, args["M"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=jetson,verbose=False)
                                 }
                             )
                     else:
@@ -120,7 +125,7 @@ def main(args):
                                     "calibration":c,
                                     "run":i,
                                     "p":p,
-                                    **benchmark_batchprocessing(X_test, Y_test, re, args["M"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=measure_jetson_power,verbose=False)
+                                    **benchmark_batchprocessing(X_test, Y_test, re, args["M"], f"{i+1}/{args['x']} Applying rejection ensemble for p = {p}", jetson=jetson,verbose=False)
                                 }
                             )
 
@@ -132,7 +137,7 @@ def main(args):
                     "calibration":None,
                     "run":i,
                     "p":None,
-                    **benchmark_batchprocessing(X_test, Y_test, fsmall, args["M"], f"{i+1}/{args['x']} Applying small model", jetson=measure_jetson_power,verbose=False)
+                    **benchmark_batchprocessing(X_test, Y_test, fsmall, args["M"], f"{i+1}/{args['x']} Applying small model", jetson=jetson,verbose=False)
                 }
             )
 
@@ -144,14 +149,18 @@ def main(args):
                     "calibration":None,
                     "run":i,
                     "p":None,
-                    **benchmark_batchprocessing(X_test, Y_test, fbig, args["M"], f"{i+1}/{args['x']} Applying big model", jetson=measure_jetson_power,verbose=False)
+                    **benchmark_batchprocessing(X_test, Y_test, fbig, args["M"], f"{i+1}/{args['x']} Applying big model", jetson=jetson,verbose=False)
                 }
             )
             print("")
 
-
+        
         with open(os.path.join(args["out"], f"{d}.json"), "w") as outfile:
             json.dump(metrics, outfile)
+    
+    if jetson:
+        jetson.stop()
+        jetson.join()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run a multi-label classification problem on a series of patients. Training and evaluation are performed on a per-patient basis, i.e. we train on patients {1,2,3} and test on patient 4.')

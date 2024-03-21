@@ -12,69 +12,79 @@ from TorchRejectionEnsemble import TorchRejectionEnsemble
 class JetsonMonitor(threading.Thread):
     def __init__(self):
         super().__init__()
-        self.stop_event = threading.Event()
+        self.kill = False
+        self.lock = threading.Lock()
         self.power = []
         self.power_avg = []
-        self.sleep_sec = 0.01
 
     def run(self):
         from jtop import jtop
         with jtop() as jetson:
-            while not self.stop_event.is_set():
+            while not self.kill or len(self.power) == 0:
+                # make sure to have at-least one measurment
                 if jetson.ok():
+                    self.lock.acquire()
                     self.power_avg.append(jetson.power['tot']['avg'])
                     self.power.append(jetson.power['tot']['power'])
-            
-            time.sleep(self.sleep_sec)
+                    self.lock.release()
+                    time.sleep(0.1)
+                
+    def reset(self):
+        self.lock.acquire()
+        self.power = []
+        self.power_avg = []
+        self.lock.release()
 
     def stop(self):
-        self.stop_event.set()
+        self.lock.acquire()
+        self.kill = True
+        self.lock.release()
 
     def get_power(self):
         return self.power, self.power_avg
 
-def benchmark_torch_realtimeprocessing(dataset, model, pbardesc = "", jetson = False, verbose = False):
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, pin_memory=True, num_workers = 6)
-    ypred = []
+# def benchmark_torch_realtimeprocessing(dataset, model, pbardesc = "", jetson = False, verbose = False):
+#     data_loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, pin_memory=True, num_workers = 6)
+#     ypred = []
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if jetson:
-        from jtop import jtop
-        jstats = jtop()
-        jstats.start()
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     if jetson:
+#         from jtop import jtop
+#         jstats = jtop()
+#         jstats.start()
 
-    runtime = []
-    power_avg = []
-    power = []
-    pcnts = []
-    targets = []
-    with tqdm.tqdm(total=len(dataset), desc = pbardesc, disable=not verbose) as pb:
-        for x, y in data_loader:
-            start = time.time()
-            cur_preds, cnt = model.predict_single(x.to(device), True)
-            runtime.append( time.time() - start )
-            pcnts.append(cnt)
+#     runtime = []
+#     power_avg = []
+#     power = []
+#     pcnts = []
+#     targets = []
+#     with tqdm.tqdm(total=len(dataset), desc = pbardesc, disable=not verbose) as pb:
+#         for x, y in data_loader:
+#             start = time.time()
+#             cur_preds, cnt = model.predict_single(x.to(device), True)
+#             runtime.append( time.time() - start )
+#             pcnts.append(cnt)
 
-            ypred.extend(cur_preds.argmax(1).cpu().numpy())
-            targets.append(y.cpu().numpy())
-            pb.update(1)
+#             ypred.extend(cur_preds.argmax(1).cpu().numpy())
+#             targets.append(y.cpu().numpy())
+#             pb.update(1)
 
-            if jetson:
-                power_avg.append(jstats.power['tot']['avg'])
-                power.append(jstats.power['tot']['power'])
+#             if jetson:
+#                 power_avg.append(jstats.power['tot']['avg'])
+#                 power.append(jstats.power['tot']['power'])
     
-    if jetson:
-        jstats.close()
+#     if jetson:
+#         jstats.close()
 
-    return {
-        "time":runtime,
-        "f1 macro":f1_score(targets, ypred, average = "macro"),
-        "f1 micro":f1_score(targets, ypred, average = "micro"),
-        "accuracy":accuracy_score(targets, ypred),
-        "p_per_batch":pcnts,
-        "power_per_batch": power if len(power) > 0 else 0,
-        "poweravg_per_batch": power_avg if len(power_avg) > 0 else 0
-    }
+#     return {
+#         "time":runtime,
+#         "f1 macro":f1_score(targets, ypred, average = "macro"),
+#         "f1 micro":f1_score(targets, ypred, average = "micro"),
+#         "accuracy":accuracy_score(targets, ypred),
+#         "p_per_batch":pcnts,
+#         "power_per_batch": power if len(power) > 0 else 0,
+#         "poweravg_per_batch": power_avg if len(power_avg) > 0 else 0
+#     }
 
 def create_mini_batches(inputs, targets, batch_size, shuffle=False):
     """ Create an mini-batch like iterator for the given inputs / target / data. Shamelessly copied from https://stackoverflow.com/questions/38157972/how-to-implement-mini-batch-gradient-descent-in-python
@@ -106,42 +116,38 @@ def create_mini_batches(inputs, targets, batch_size, shuffle=False):
 
         yield inputs[excerpt], targets[excerpt]
 
-def benchmark_batchprocessing(X, y, model, batch_size = 32, pbardesc = "", jetson = False, verbose = False):
-    ypred = []
+def benchmark_batchprocessing(X, y, model, batch_size = 32, pbardesc = "", jetson = None, verbose = False, n_repetitions = 1):
     if jetson:
-        jm = JetsonMonitor()
-        jm.start()
+        jetson.reset()
 
-    runtime = []
-    pcnts = []
-    targets = []
-    with tqdm.tqdm(total=X.shape[0], desc = pbardesc, disable=not verbose) as pb:
-        for xbatch, ybatch in create_mini_batches(X, y, batch_size):
-            start = time.time()
-            
-            if isinstance(model, RejectionEnsemble):
-                cur_preds, cnt = model.predict_proba(xbatch, True)
-            else:
-                cur_preds, cnt = model.predict_proba(xbatch), X.shape[0]
+    for i in range(n_repetitions):
+        ypred = []
+        runtime = []
+        pcnts = []
+        with tqdm.tqdm(total=X.shape[0], desc = f"{i}: {pbardesc}", disable=not verbose) as pb:
+            for xbatch, ybatch in create_mini_batches(X, y, batch_size):
+                start = time.time()
+                
+                if isinstance(model, RejectionEnsemble):
+                    cur_preds, cnt = model.predict_proba(xbatch, True)
+                else:
+                    cur_preds, cnt = model.predict_proba(xbatch), X.shape[0]
 
-            runtime.append( time.time() - start )
-            pcnts.append(cnt/xbatch.shape[0])
+                runtime.append( time.time() - start )
+                pcnts.append(cnt/xbatch.shape[0])
 
-            ypred.extend(cur_preds.argmax(1))
-            targets.extend(ybatch)
+                ypred.extend(cur_preds.argmax(1))
 
-            pb.update(xbatch.shape[0])
+                pb.update(xbatch.shape[0])
 
     if jetson:
-        power, power_avg = jm.get_power()
-        jm.stop()
-        jm.join()
+        power, power_avg = jetson.get_power()
 
     return {
         "time":runtime,
-        "f1 macro":f1_score(targets, ypred, average = "macro"),
-        "f1 micro":f1_score(targets, ypred, average = "micro"),
-        "accuracy":accuracy_score(targets, ypred),
+        "f1 macro":f1_score(y, ypred, average = "macro"),
+        "f1 micro":f1_score(y, ypred, average = "micro"),
+        "accuracy":accuracy_score(y, ypred),
         "p_per_batch":pcnts,
         "power_per_batch": power if jetson else 0,
         "poweravg_per_batch": power_avg if jetson else 0
@@ -152,8 +158,7 @@ def benchmark_torch_batchprocessing(dataset, model, batch_size = 32, pbardesc = 
     ypred = []
     
     if jetson:
-        jm = JetsonMonitor()
-        jm.start()
+        jetson.reset()
 
     runtime = []
     pcnts = []
@@ -175,9 +180,7 @@ def benchmark_torch_batchprocessing(dataset, model, batch_size = 32, pbardesc = 
             pb.update(xbatch.shape[0])
 
     if jetson:
-        power, power_avg = jm.get_power()
-        jm.stop()
-        jm.join()
+        power, power_avg = jetson.get_power()
 
     return {
         "time":runtime,
